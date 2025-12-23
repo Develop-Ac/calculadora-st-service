@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PagamentoGuia {
+  chave_nfe      String   @id
+  data_pagamento DateTime @default(now())
+  valor          Float    @default(0.0)
+  observacoes    String   @default("")
+
+  @@map("com_pagamento_guia")
+}
+
+model NfeConciliacao {
+  chave_nfe      String   @id
+  emitente       String
+  cnpj_emitente  String?
+  data_emissao   DateTime
+  valor_total    Float
+  xml_completo   String   @db.Text
+  
+  // Status Analysis (User Input)
+  status_analise String   @default("Tributado - Verificado")
+  valor_guia     Float    @default(0.0)
+  
+  // ERP Status (ETL)
+  status_erp     String   @default("PENDENTE") // PENDENTE, LANCADA
+  
+  // Operation Details
+  tipo_operacao       Int    @default(0) // 0 - Entrada, 1 - Saída
+  tipo_operacao_desc  String @default("ENTRADA PRÓPRIA")
+
+  updated_at     DateTime @updatedAt
+  created_at     DateTime @default(now())
+
+  @@map("com_nfe_conciliacao")
+}
