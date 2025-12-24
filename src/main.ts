@@ -64,9 +64,19 @@ async function bootstrap() {
     );
 
     const port = parseInt(process.env.PORT ?? '3000', 10);
+
+    // Graceful shutdown
+    process.on('SIGTERM', () => {
+        Logger.log('Received SIGTERM signal. Closing http server...', 'Bootstrap');
+        app.close();
+    });
+
     await app.listen(port, '0.0.0.0');
     Logger.log(`API Calculadora ST ativa em http://localhost:${port}`, 'Bootstrap');
     Logger.log(`Swagger documentation available at http://localhost:${port}/api/docs`, 'Bootstrap');
 }
 
-bootstrap();
+bootstrap().catch(err => {
+    Logger.error('Fatal error during application bootstrap', err, 'Bootstrap');
+    process.exit(1);
+});
