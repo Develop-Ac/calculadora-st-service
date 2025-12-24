@@ -16,7 +16,7 @@ FROM base AS deps
 COPY package*.json ./
 COPY prisma ./prisma/
 # Install dependencies (including devDependencies for build)
-RUN npm ci
+RUN npm install --legacy-peer-deps
 
 # Build stage
 FROM base AS builder
