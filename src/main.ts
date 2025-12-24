@@ -1,6 +1,7 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as bodyParser from 'body-parser';
 import helmet from 'helmet';
 import * as dotenv from 'dotenv';
@@ -31,12 +32,26 @@ async function bootstrap() {
 
     app.setGlobalPrefix('api');
 
+    const config = new DocumentBuilder()
+        .setTitle('Calculadora ICMS ST API')
+        .setDescription('API para cálculo de ICMS ST e geração de DANFE')
+        .setVersion('1.0')
+        .addTag('icms')
+        .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+
     const httpServer = app.getHttpAdapter().getInstance();
     httpServer.get('/', (req, res) => {
         const requesterIp =
             req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? req.connection?.remoteAddress ?? 'unknown';
         Logger.log(`Requisicao de status recebida de ${requesterIp}`, 'Bootstrap');
-        res.status(200).send('API Calculadora ST ativa. Utilize o prefixo /api para acessar as rotas.');
+        res.status(200).json({
+            status: 'online',
+            message: 'O servidor está online e funcional',
+            docs: '/api/docs',
+            timestamp: new Date().toISOString()
+        });
     });
 
     app.useGlobalPipes(
@@ -51,6 +66,7 @@ async function bootstrap() {
     const port = parseInt(process.env.PORT ?? '3000', 10);
     await app.listen(port, '0.0.0.0');
     Logger.log(`API Calculadora ST ativa em http://localhost:${port}`, 'Bootstrap');
+    Logger.log(`Swagger documentation available at http://localhost:${port}/api/docs`, 'Bootstrap');
 }
 
 bootstrap();

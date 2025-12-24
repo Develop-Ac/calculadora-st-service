@@ -1,7 +1,9 @@
 import { Body, Controller, Get, Post, Query, StreamableFile, Res } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
+import { ApiTags } from '@nestjs/swagger';
 
+@ApiTags('icms')
 @Controller('icms')
 export class IcmsController {
     constructor(private readonly service: IcmsService) { }
