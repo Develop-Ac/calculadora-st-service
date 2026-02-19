@@ -294,9 +294,15 @@ export class IcmsService {
             }
 
             // Logic for Credit Origin
-            let taxaOrigem = 0.07;
-            if (pIcmsOrigem > 0) {
-                taxaOrigem = pIcmsOrigem <= 7.0 ? pIcmsOrigem / 100.0 : 0.07;
+            // Rule:
+            // 1. If pICMS > 0 and <= 7% -> Use it.
+            // 2. If pICMS > 7% -> Cap at 7%.
+            // 3. If pICMS is 0 or missing -> Default to 7%.
+
+            let taxaOrigem = 0.07; // Default covering 0, missing, or > 7%
+
+            if (pIcmsOrigem > 0.00 && pIcmsOrigem <= 7.0) {
+                taxaOrigem = pIcmsOrigem / 100.0;
             }
 
             const baseCreditoOrigem = vProd + vFrete + vSeg + vOutro - vDesc;
@@ -311,9 +317,11 @@ export class IcmsService {
             let isDefaultMva = false;
 
             if (effectiveMva === null) {
+                // FALLBACK MVA: 50.39%
+                // Used when product is NOT found in reference list
                 effectiveMva = 0.5039;
                 isDefaultMva = true;
-                // Keep matchType as 'Não Encontrado' to trigger selection screen (unmatched list)
+                // Keep matchType as 'Não Encontrado' to trigger selection screen
             }
 
             const baseSoma = vProd + vIpi + vFrete + vSeg + vOutro - vDesc;
