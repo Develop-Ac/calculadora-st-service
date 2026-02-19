@@ -8,6 +8,7 @@ import * as dotenv from 'dotenv';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+    Logger.log('Starting bootstrap...', 'Bootstrap');
     try { dotenv.config(); } catch (_) { }
     const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
 
@@ -21,6 +22,7 @@ async function bootstrap() {
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
+    Logger.log(`Raw CORS_ORIGIN env: '${process.env.CORS_ORIGIN}'`, 'Bootstrap');
     const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ?? true;
     Logger.log(`CORS Origins configured: ${JSON.stringify(corsOrigins)}`, 'Bootstrap');
 
@@ -72,8 +74,16 @@ async function bootstrap() {
     });
 
     await app.listen(port, '0.0.0.0');
-    Logger.log(`API Calculadora ST ativa em http://localhost:${port}`, 'Bootstrap');
-    Logger.log(`Swagger documentation available at http://localhost:${port}/api/docs`, 'Bootstrap');
+
+    const url = await app.getUrl();
+
+    Logger.log('------------------------------------------------------', 'Bootstrap');
+    Logger.log(`🚀  Service ready and listening!`, 'Bootstrap');
+    Logger.log(`------------------------------------------------------`, 'Bootstrap');
+    Logger.log(`🟢  Local:   ${url}`, 'Bootstrap');
+    Logger.log(`🟢  Network: http://0.0.0.0:${port}`, 'Bootstrap');
+    Logger.log(`📄  Swagger: ${url}/api/docs`, 'Bootstrap');
+    Logger.log(`------------------------------------------------------`, 'Bootstrap');
 }
 
 bootstrap().catch(err => {

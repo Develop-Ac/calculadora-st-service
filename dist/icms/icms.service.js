@@ -84,60 +84,67 @@ let IcmsService = IcmsService_1 = class IcmsService {
     }
     async syncInvoices(start, end) {
         var _a;
-        const erpInvoices = await this.fetchErpInvoices(start, end);
-        const erpKeys = new Set();
-        for (const inv of erpInvoices) {
-            erpKeys.add(inv.CHAVE_NFE);
-            let valorTotal = 0;
-            const vNfMatch = (_a = inv.XML_COMPLETO) === null || _a === void 0 ? void 0 : _a.match(/<vNF>([\d\.]+)<\/vNF>/);
-            if (vNfMatch) {
-                valorTotal = parseFloat(vNfMatch[1]);
-            }
-            await this.prisma.nfeConciliacao.upsert({
-                where: { chave_nfe: inv.CHAVE_NFE },
-                create: {
-                    chave_nfe: inv.CHAVE_NFE,
-                    emitente: inv.NOME_EMITENTE || 'Desconhecido',
-                    cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
-                    data_emissao: new Date(inv.DATA_EMISSAO),
-                    valor_total: valorTotal,
-                    xml_completo: inv.XML_COMPLETO || '',
-                    status_erp: 'PENDENTE',
-                    tipo_operacao: inv.TIPO_OPERACAO,
-                    tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
-                },
-                update: {
-                    status_erp: 'PENDENTE',
-                    updated_at: new Date()
+        try {
+            const erpInvoices = await this.fetchErpInvoices(start, end);
+            this.logger.log(`Fetched ${erpInvoices.length} invoices from ERP`, 'Sync');
+            const erpKeys = new Set();
+            for (const inv of erpInvoices) {
+                erpKeys.add(inv.CHAVE_NFE);
+                let valorTotal = 0;
+                const vNfMatch = (_a = inv.XML_COMPLETO) === null || _a === void 0 ? void 0 : _a.match(/<vNF>([\d\.]+)<\/vNF>/);
+                if (vNfMatch) {
+                    valorTotal = parseFloat(vNfMatch[1]);
                 }
-            });
-        }
-        const pendingLocal = await this.prisma.nfeConciliacao.findMany({
-            where: { status_erp: 'PENDENTE' },
-            select: { chave_nfe: true }
-        });
-        for (const local of pendingLocal) {
-            if (!erpKeys.has(local.chave_nfe)) {
-                await this.prisma.nfeConciliacao.update({
-                    where: { chave_nfe: local.chave_nfe },
-                    data: { status_erp: 'LANCADA' }
+                await this.prisma.nfeConciliacao.upsert({
+                    where: { chave_nfe: inv.CHAVE_NFE },
+                    create: {
+                        chave_nfe: inv.CHAVE_NFE,
+                        emitente: inv.NOME_EMITENTE || 'Desconhecido',
+                        cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
+                        data_emissao: new Date(inv.DATA_EMISSAO),
+                        valor_total: valorTotal,
+                        xml_completo: inv.XML_COMPLETO || '',
+                        status_erp: 'PENDENTE',
+                        tipo_operacao: inv.TIPO_OPERACAO,
+                        tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
+                    },
+                    update: {
+                        status_erp: 'PENDENTE',
+                        updated_at: new Date()
+                    }
                 });
             }
+            const pendingLocal = await this.prisma.nfeConciliacao.findMany({
+                where: { status_erp: 'PENDENTE' },
+                select: { chave_nfe: true }
+            });
+            for (const local of pendingLocal) {
+                if (!erpKeys.has(local.chave_nfe)) {
+                    await this.prisma.nfeConciliacao.update({
+                        where: { chave_nfe: local.chave_nfe },
+                        data: { status_erp: 'LANCADA' }
+                    });
+                }
+            }
+            const allLocal = await this.prisma.nfeConciliacao.findMany({
+                orderBy: { data_emissao: 'desc' }
+            });
+            return allLocal.map(local => ({
+                CHAVE_NFE: local.chave_nfe,
+                NOME_EMITENTE: local.emitente,
+                CPF_CNPJ_EMITENTE: local.cnpj_emitente,
+                DATA_EMISSAO: local.data_emissao,
+                VALOR_TOTAL: local.valor_total,
+                STATUS_ERP: local.status_erp,
+                TIPO_OPERACAO: local.tipo_operacao,
+                TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
+                XML_COMPLETO: local.xml_completo
+            }));
         }
-        const allLocal = await this.prisma.nfeConciliacao.findMany({
-            orderBy: { data_emissao: 'desc' }
-        });
-        return allLocal.map(local => ({
-            CHAVE_NFE: local.chave_nfe,
-            NOME_EMITENTE: local.emitente,
-            CPF_CNPJ_EMITENTE: local.cnpj_emitente,
-            DATA_EMISSAO: local.data_emissao,
-            VALOR_TOTAL: local.valor_total,
-            STATUS_ERP: local.status_erp,
-            TIPO_OPERACAO: local.tipo_operacao,
-            TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-            XML_COMPLETO: local.xml_completo
-        }));
+        catch (error) {
+            this.logger.error('Error in syncInvoices', error, 'Sync');
+            throw error;
+        }
     }
     async fetchErpInvoices(start, end) {
         const dtInicio = start ? start : new Date().toISOString().slice(0, 10);
@@ -282,13 +289,20 @@ let IcmsService = IcmsService_1 = class IcmsService {
             let vStCalculado = 0;
             let diffSt = 0;
             let status = "";
-            if (mva !== null) {
-                const baseSoma = vProd + vIpi + vFrete + vSeg + vOutro - vDesc;
-                const baseCalcStRef = baseSoma * (1 + mva);
-                const debitoSt = baseCalcStRef * (icmsInternoRate / 100.0);
-                const vStCalculadoRaw = Math.max(0, debitoSt - vCreditoOrigem);
-                vStCalculado = parseFloat(vStCalculadoRaw.toFixed(2));
-                diffSt = vStCalculado - vStDestacado;
+            let effectiveMatchType = matchType;
+            let effectiveMva = mva;
+            let isDefaultMva = false;
+            if (effectiveMva === null) {
+                effectiveMva = 0.5039;
+                isDefaultMva = true;
+            }
+            const baseSoma = vProd + vIpi + vFrete + vSeg + vOutro - vDesc;
+            const baseCalcStRef = baseSoma * (1 + effectiveMva);
+            const debitoSt = baseCalcStRef * (icmsInternoRate / 100.0);
+            const vStCalculadoRaw = Math.max(0, debitoSt - vCreditoOrigem);
+            vStCalculado = parseFloat(vStCalculadoRaw.toFixed(2));
+            diffSt = vStCalculado - vStDestacado;
+            if (!isDefaultMva) {
                 if (diffSt > 0.05)
                     status = "Guia Complementar";
                 else if (diffSt < -0.05)
@@ -297,8 +311,12 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     status = "OK";
             }
             else {
-                status = "NCM s/ Ref";
-                diffSt = 0;
+                if (diffSt > 0.05)
+                    status = "Guia Compl. (Padrão 50%)";
+                else if (diffSt < -0.05)
+                    status = "Pago Maior (Padrão 50%)";
+                else
+                    status = "OK (Padrão 50%)";
             }
             results.push({
                 chaveNfe: chave,
@@ -309,9 +327,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 ncmNota: ncm,
                 cfop: prod.CFOP,
                 refTabela: itemRef,
-                matchType: matchType,
+                matchType: effectiveMatchType,
                 mvaNota: pMvaNota,
-                mvaRef: mva ? mva * 100 : 0,
+                mvaRef: effectiveMva * 100,
                 vlProduto: vProd,
                 vlIcmsProprio: vIcmsProprio,
                 creditoOrigem: vCreditoOrigem,

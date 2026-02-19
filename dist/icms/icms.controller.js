@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.IcmsController = void 0;
 const common_1 = require("@nestjs/common");
 const icms_service_1 = require("./icms.service");
+const swagger_1 = require("@nestjs/swagger");
 let IcmsController = class IcmsController {
     constructor(service) {
         this.service = service;
@@ -106,6 +107,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "generateDanfeBatch", null);
 exports.IcmsController = IcmsController = __decorate([
+    (0, swagger_1.ApiTags)('icms'),
     (0, common_1.Controller)('icms'),
     __metadata("design:paramtypes", [icms_service_1.IcmsService])
 ], IcmsController);

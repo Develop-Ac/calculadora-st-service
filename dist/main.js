@@ -38,12 +38,14 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const common_1 = require("@nestjs/common");
 const core_1 = require("@nestjs/core");
+const swagger_1 = require("@nestjs/swagger");
 const bodyParser = __importStar(require("body-parser"));
 const helmet_1 = __importDefault(require("helmet"));
 const dotenv = __importStar(require("dotenv"));
 const app_module_1 = require("./app.module");
 async function bootstrap() {
     var _a, _b, _c;
+    common_1.Logger.log('Starting bootstrap...', 'Bootstrap');
     try {
         dotenv.config();
     }
@@ -55,6 +57,7 @@ async function bootstrap() {
     }));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+    common_1.Logger.log(`Raw CORS_ORIGIN env: '${process.env.CORS_ORIGIN}'`, 'Bootstrap');
     const corsOrigins = (_b = (_a = process.env.CORS_ORIGIN) === null || _a === void 0 ? void 0 : _a.split(',').map((origin) => origin.trim())) !== null && _b !== void 0 ? _b : true;
     common_1.Logger.log(`CORS Origins configured: ${JSON.stringify(corsOrigins)}`, 'Bootstrap');
     app.enableCors({
@@ -63,12 +66,25 @@ async function bootstrap() {
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     });
     app.setGlobalPrefix('api');
+    const config = new swagger_1.DocumentBuilder()
+        .setTitle('Calculadora ICMS ST API')
+        .setDescription('API para cálculo de ICMS ST e geração de DANFE')
+        .setVersion('1.0')
+        .addTag('icms')
+        .build();
+    const document = swagger_1.SwaggerModule.createDocument(app, config);
+    swagger_1.SwaggerModule.setup('api/docs', app, document);
     const httpServer = app.getHttpAdapter().getInstance();
     httpServer.get('/', (req, res) => {
         var _a, _b, _c, _d, _e;
         const requesterIp = (_e = (_c = (_a = req.headers['x-forwarded-for']) !== null && _a !== void 0 ? _a : (_b = req.socket) === null || _b === void 0 ? void 0 : _b.remoteAddress) !== null && _c !== void 0 ? _c : (_d = req.connection) === null || _d === void 0 ? void 0 : _d.remoteAddress) !== null && _e !== void 0 ? _e : 'unknown';
         common_1.Logger.log(`Requisicao de status recebida de ${requesterIp}`, 'Bootstrap');
-        res.status(200).send('API Calculadora ST ativa. Utilize o prefixo /api para acessar as rotas.');
+        res.status(200).json({
+            status: 'online',
+            message: 'O servidor está online e funcional',
+            docs: '/api/docs',
+            timestamp: new Date().toISOString()
+        });
     });
     app.useGlobalPipes(new common_1.ValidationPipe({
         whitelist: true,
@@ -77,8 +93,22 @@ async function bootstrap() {
         transformOptions: { enableImplicitConversion: true },
     }));
     const port = parseInt((_c = process.env.PORT) !== null && _c !== void 0 ? _c : '3000', 10);
+    process.on('SIGTERM', () => {
+        common_1.Logger.log('Received SIGTERM signal. Closing http server...', 'Bootstrap');
+        app.close();
+    });
     await app.listen(port, '0.0.0.0');
-    common_1.Logger.log(`API Calculadora ST ativa em http://localhost:${port}`, 'Bootstrap');
+    const url = await app.getUrl();
+    common_1.Logger.log('------------------------------------------------------', 'Bootstrap');
+    common_1.Logger.log(`🚀  Service ready and listening!`, 'Bootstrap');
+    common_1.Logger.log(`------------------------------------------------------`, 'Bootstrap');
+    common_1.Logger.log(`🟢  Local:   ${url}`, 'Bootstrap');
+    common_1.Logger.log(`🟢  Network: http://0.0.0.0:${port}`, 'Bootstrap');
+    common_1.Logger.log(`📄  Swagger: ${url}/api/docs`, 'Bootstrap');
+    common_1.Logger.log(`------------------------------------------------------`, 'Bootstrap');
 }
-bootstrap();
+bootstrap().catch(err => {
+    common_1.Logger.error('Fatal error during application bootstrap', err, 'Bootstrap');
+    process.exit(1);
+});
 //# sourceMappingURL=main.js.map
