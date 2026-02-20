@@ -346,6 +346,7 @@ export class IcmsService {
             // ============================================
             // CALCULO DO DIFAL
             // ============================================
+            // Regra independente do MVA: Calcula o DIFAL sempre baseando-se apenas na Base de Cálculo da Operação
             const aliquotaInternaDecimal = icmsInternoRate / 100.0;
             const aliquotaInterestadualDIFAL = pIcmsOrigem > 0 ? pIcmsOrigem / 100.0 : 0.07; // Usa a taxa de origem real para DIFAL ou 7% padrão
             let vlDifalCalculado = 0;
