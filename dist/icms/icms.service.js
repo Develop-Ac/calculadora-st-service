@@ -138,7 +138,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 STATUS_ERP: local.status_erp,
                 TIPO_OPERACAO: local.tipo_operacao,
                 TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-                XML_COMPLETO: local.xml_completo
+                XML_COMPLETO: local.xml_completo,
+                TIPO_IMPOSTO: local.tipo_imposto
             }));
         }
         catch (error) {
@@ -281,8 +282,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     pIcmsOrigem = parseFloat(vals.pICMS);
             }
             let taxaOrigem = 0.07;
-            if (pIcmsOrigem > 0) {
-                taxaOrigem = pIcmsOrigem <= 7.0 ? pIcmsOrigem / 100.0 : 0.07;
+            if (pIcmsOrigem > 0.00 && pIcmsOrigem <= 7.0) {
+                taxaOrigem = pIcmsOrigem / 100.0;
             }
             const baseCreditoOrigem = vProd + vFrete + vSeg + vOutro - vDesc;
             const vCreditoOrigem = baseCreditoOrigem * taxaOrigem;
@@ -318,6 +319,19 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 else
                     status = "OK (Padrão 50%)";
             }
+            const aliquotaInternaDecimal = icmsInternoRate / 100.0;
+            const aliquotaInterestadualDIFAL = pIcmsOrigem > 0 ? pIcmsOrigem / 100.0 : 0.07;
+            let vlDifalCalculado = 0;
+            if (vIcmsProprio > 0) {
+                const baseDifal = (baseSoma - vIcmsProprio) / (1 - aliquotaInternaDecimal);
+                const difalRaw = (baseDifal * aliquotaInternaDecimal) - (baseSoma * aliquotaInterestadualDIFAL);
+                vlDifalCalculado = Math.max(0, difalRaw);
+            }
+            else {
+                const difalRaw = baseSoma * (aliquotaInternaDecimal - aliquotaInterestadualDIFAL);
+                vlDifalCalculado = Math.max(0, difalRaw);
+            }
+            vlDifalCalculado = parseFloat(vlDifalCalculado.toFixed(2));
             results.push({
                 chaveNfe: chave,
                 emitente: emit.xNome,
@@ -335,6 +349,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 creditoOrigem: vCreditoOrigem,
                 stDestacado: vStDestacado,
                 stCalculado: vStCalculado,
+                vlDifal: vlDifalCalculado,
                 diferenca: diffSt,
                 status: status
             });
@@ -342,7 +357,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return results;
     }
     async savePaymentStatus(dto) {
-        return this.prisma.pagamentoGuia.upsert({
+        const result = await this.prisma.pagamentoGuia.upsert({
             where: { chave_nfe: dto.chaveNfe },
             create: {
                 chave_nfe: dto.chaveNfe,
@@ -356,12 +371,29 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 data_pagamento: new Date()
             }
         });
+        if (dto.tipo_imposto !== undefined) {
+            await this.prisma.nfeConciliacao.update({
+                where: { chave_nfe: dto.chaveNfe },
+                data: { tipo_imposto: dto.tipo_imposto }
+            }).catch(e => this.logger.error("Error updating tipo_imposto in NfeConciliacao", e));
+        }
+        return result;
     }
     async getPaymentStatusMap() {
+        const agruparTipoImposto = await this.prisma.nfeConciliacao.findMany({ select: { chave_nfe: true, tipo_imposto: true } });
         const all = await this.prisma.pagamentoGuia.findMany();
+        const mapTipoImposto = {};
+        for (const nfe of agruparTipoImposto) {
+            if (nfe.tipo_imposto)
+                mapTipoImposto[nfe.chave_nfe] = nfe.tipo_imposto;
+        }
         const map = {};
         for (const item of all) {
-            map[item.chave_nfe] = { status: item.observacoes, valor: item.valor };
+            map[item.chave_nfe] = {
+                status: item.observacoes,
+                valor: item.valor,
+                tipo_imposto: mapTipoImposto[item.chave_nfe]
+            };
         }
         return map;
     }

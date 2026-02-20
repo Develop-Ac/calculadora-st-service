@@ -14,6 +14,7 @@ export declare class IcmsController {
         TIPO_OPERACAO: number;
         TIPO_OPERACAO_DESC: string;
         XML_COMPLETO: string;
+        TIPO_IMPOSTO: string;
     }[]>;
     calculate(body: {
         xmls: string[];
@@ -27,6 +28,7 @@ export declare class IcmsController {
     getPaymentStatus(): Promise<Record<string, {
         status: string;
         valor: number;
+        tipo_imposto?: string;
     }>>;
     generateDanfe(body: {
         xml: string;

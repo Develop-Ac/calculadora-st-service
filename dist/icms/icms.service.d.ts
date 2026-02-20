@@ -17,6 +17,7 @@ export declare class IcmsService {
         TIPO_OPERACAO: number;
         TIPO_OPERACAO_DESC: string;
         XML_COMPLETO: string;
+        TIPO_IMPOSTO: string;
     }[]>;
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
     private decodeXml;
@@ -28,6 +29,7 @@ export declare class IcmsService {
         chaveNfe: string;
         valor?: number;
         observacoes?: string;
+        tipo_imposto?: string;
     }): Promise<{
         chave_nfe: string;
         data_pagamento: Date;
@@ -37,6 +39,7 @@ export declare class IcmsService {
     getPaymentStatusMap(): Promise<Record<string, {
         status: string;
         valor: number;
+        tipo_imposto?: string;
     }>>;
     generateDanfe(xml: string): Promise<Buffer>;
     generateDanfeZip(invoices: {

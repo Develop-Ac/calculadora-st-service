@@ -34,6 +34,7 @@ model NfeConciliacao {
   // Operation Details
   tipo_operacao       Int    @default(0) // 0 - Entrada, 1 - Saída
   tipo_operacao_desc  String @default("ENTRADA PRÓPRIA")
+  tipo_imposto        String?
 
   updated_at     DateTime @updatedAt
   created_at     DateTime @default(now())
