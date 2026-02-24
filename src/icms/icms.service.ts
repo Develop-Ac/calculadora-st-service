@@ -391,7 +391,7 @@ export class IcmsService {
     }
     // --- PERSISTENCE ---
 
-    async savePaymentStatus(dto: { chaveNfe: string, valor?: number, observacoes?: string, tipo_imposto?: string }) {
+    async savePaymentStatus(dto: { chaveNfe: string, valor?: number, observacoes?: string, tipo_imposto?: string, usuario?: string }) {
         const result = await this.prisma.pagamentoGuia.upsert({
             where: { chave_nfe: dto.chaveNfe },
             create: {
@@ -413,6 +413,18 @@ export class IcmsService {
                 data: { tipo_imposto: dto.tipo_imposto }
             }).catch(e => this.logger.error("Error updating tipo_imposto in NfeConciliacao", e));
         }
+
+        await fetch('http://log-service.acacessorios.local/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+            usuario: dto.usuario,
+            setor: 'Compras',
+            tela: 'ICMS ST',
+            acao: 'Create',
+            descricao: `Guia de pagamento salva para NFe ${dto.chaveNfe} com valor ${dto.valor} e observações: ${dto.observacoes}`,
+            }),
+        });
 
         return result;
     }
