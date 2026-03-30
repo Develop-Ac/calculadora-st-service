@@ -255,7 +255,35 @@ export class IcmsService {
         const infNfe = nfe.infNFe;
         const chave = infNfe['$']['Id'].replace('NFe', '');
         const emit = infNfe.emit;
+        const ide = infNfe.ide;
+        const total = infNfe.total.ICMSTot;
         const det = Array.isArray(infNfe.det) ? infNfe.det : [infNfe.det];
+
+        // --- UPSERT INTO NfeConciliacao ---
+        // This ensures that even XML-uploaded notes exist in the DB for status tracking
+        try {
+            await this.prisma.nfeConciliacao.upsert({
+                where: { chave_nfe: chave },
+                create: {
+                    chave_nfe: chave,
+                    emitente: emit.xNome || 'Desconhecido',
+                    cnpj_emitente: emit.CNPJ || emit.CPF,
+                    data_emissao: new Date(ide.dhEmi || ide.dEmi),
+                    valor_total: parseFloat(total.vNF || 0),
+                    xml_completo: xmlContent, // Store original (decoded if was base64)
+                    status_erp: 'UPLOAD', // Mark as upload to distinguish
+                    tipo_operacao: parseInt(ide.tpNF || 0),
+                    tipo_operacao_desc: parseInt(ide.tpNF) === 0 ? 'ENTRADA' : 'SAÍDA'
+                },
+                update: {
+                    // Update XML if it changed or to ensure it's there
+                    xml_completo: xmlContent,
+                    updated_at: new Date()
+                }
+            });
+        } catch (e) {
+            this.logger.error(`Error upserting NFe ${chave} during calculation`, e);
+        }
 
         const results = [];
 
