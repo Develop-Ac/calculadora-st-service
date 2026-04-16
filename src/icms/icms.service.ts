@@ -157,18 +157,22 @@ export class IcmsService {
                 take: 1200
             });
 
-            return allLocal.map(local => ({
-                CHAVE_NFE: local.chave_nfe,
-                NOME_EMITENTE: local.emitente,
-                CPF_CNPJ_EMITENTE: local.cnpj_emitente,
-                DATA_EMISSAO: local.data_emissao,
-                VALOR_TOTAL: local.valor_total,
-                STATUS_ERP: local.status_erp,
-                TIPO_OPERACAO: local.tipo_operacao,
-                TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-                XML_COMPLETO: local.xml_completo,
-                XML_TIPO: this.detectXmlType(local.xml_completo),
-                TIPO_IMPOSTO: local.tipo_imposto
+            return await Promise.all(allLocal.map(async (local) => {
+                const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+
+                return {
+                    CHAVE_NFE: local.chave_nfe,
+                    NOME_EMITENTE: local.emitente,
+                    CPF_CNPJ_EMITENTE: local.cnpj_emitente,
+                    DATA_EMISSAO: local.data_emissao,
+                    VALOR_TOTAL: local.valor_total,
+                    STATUS_ERP: local.status_erp,
+                    TIPO_OPERACAO: local.tipo_operacao,
+                    TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
+                    XML_COMPLETO: local.xml_completo,
+                    XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
+                    TIPO_IMPOSTO: local.tipo_imposto
+                };
             }));
         } catch (error) {
             this.logger.error('Error in syncInvoices', error, 'Sync');
