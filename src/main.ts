@@ -22,12 +22,37 @@ async function bootstrap() {
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
+    const normalizeOrigin = (value?: string | null) => {
+        if (!value) return '';
+        return value.trim().replace(/^['\"]|['\"]$/g, '').replace(/\/$/, '').toLowerCase();
+    };
+
+    const configuredOrigins = (process.env.CORS_ORIGIN ?? '')
+        .split(/[;,]/)
+        .map((origin) => normalizeOrigin(origin))
+        .filter(Boolean);
+
+    const allowAllOrigins = configuredOrigins.includes('*');
+    const allowedOrigins = new Set(configuredOrigins);
+
     Logger.log(`Raw CORS_ORIGIN env: '${process.env.CORS_ORIGIN}'`, 'Bootstrap');
-    const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((origin) => origin.trim()) ?? true;
-    Logger.log(`CORS Origins configured: ${JSON.stringify(corsOrigins)}`, 'Bootstrap');
+    Logger.log(`CORS Origins configured: ${JSON.stringify(configuredOrigins)}`, 'Bootstrap');
 
     app.enableCors({
-        origin: corsOrigins,
+        origin: (origin, callback) => {
+            // Requisicoes server-to-server ou tools sem Origin
+            if (!origin) {
+                return callback(null, true);
+            }
+
+            const normalizedRequestOrigin = normalizeOrigin(origin);
+            if (allowAllOrigins || allowedOrigins.has(normalizedRequestOrigin)) {
+                return callback(null, true);
+            }
+
+            Logger.warn(`CORS blocked origin: ${origin}`, 'Bootstrap');
+            return callback(new Error(`Origin '${origin}' not allowed by CORS`), false);
+        },
         credentials: true,
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     });

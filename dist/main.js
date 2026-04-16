@@ -44,7 +44,7 @@ const helmet_1 = __importDefault(require("helmet"));
 const dotenv = __importStar(require("dotenv"));
 const app_module_1 = require("./app.module");
 async function bootstrap() {
-    var _a, _b, _c;
+    var _a, _b;
     common_1.Logger.log('Starting bootstrap...', 'Bootstrap');
     try {
         dotenv.config();
@@ -57,11 +57,31 @@ async function bootstrap() {
     }));
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+    const normalizeOrigin = (value) => {
+        if (!value)
+            return '';
+        return value.trim().replace(/^['\"]|['\"]$/g, '').replace(/\/$/, '').toLowerCase();
+    };
+    const configuredOrigins = ((_a = process.env.CORS_ORIGIN) !== null && _a !== void 0 ? _a : '')
+        .split(/[;,]/)
+        .map((origin) => normalizeOrigin(origin))
+        .filter(Boolean);
+    const allowAllOrigins = configuredOrigins.includes('*');
+    const allowedOrigins = new Set(configuredOrigins);
     common_1.Logger.log(`Raw CORS_ORIGIN env: '${process.env.CORS_ORIGIN}'`, 'Bootstrap');
-    const corsOrigins = (_b = (_a = process.env.CORS_ORIGIN) === null || _a === void 0 ? void 0 : _a.split(',').map((origin) => origin.trim())) !== null && _b !== void 0 ? _b : true;
-    common_1.Logger.log(`CORS Origins configured: ${JSON.stringify(corsOrigins)}`, 'Bootstrap');
+    common_1.Logger.log(`CORS Origins configured: ${JSON.stringify(configuredOrigins)}`, 'Bootstrap');
     app.enableCors({
-        origin: corsOrigins,
+        origin: (origin, callback) => {
+            if (!origin) {
+                return callback(null, true);
+            }
+            const normalizedRequestOrigin = normalizeOrigin(origin);
+            if (allowAllOrigins || allowedOrigins.has(normalizedRequestOrigin)) {
+                return callback(null, true);
+            }
+            common_1.Logger.warn(`CORS blocked origin: ${origin}`, 'Bootstrap');
+            return callback(new Error(`Origin '${origin}' not allowed by CORS`), false);
+        },
         credentials: true,
         methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     });
@@ -92,7 +112,7 @@ async function bootstrap() {
         forbidNonWhitelisted: true,
         transformOptions: { enableImplicitConversion: true },
     }));
-    const port = parseInt((_c = process.env.PORT) !== null && _c !== void 0 ? _c : '3000', 10);
+    const port = parseInt((_b = process.env.PORT) !== null && _b !== void 0 ? _b : '3000', 10);
     process.on('SIGTERM', () => {
         common_1.Logger.log('Received SIGTERM signal. Closing http server...', 'Bootstrap');
         app.close();
