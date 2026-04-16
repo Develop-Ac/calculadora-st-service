@@ -19,8 +19,17 @@ export declare class IcmsService {
         XML_COMPLETO: string;
         TIPO_IMPOSTO: string;
     }[]>;
+    syncLaunchedInvoicesFromEntradaXml(): Promise<{
+        totalEncontradas: number;
+        inseridas: number;
+        ignoradas: number;
+    }>;
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
+    fetchEntradaXmlInvoices(): Promise<any[]>;
     private decodeXml;
+    private normalizeBlobXml;
+    private toFirebirdDateOrNull;
+    private extractInvoiceMetadataFromXml;
     private isInterstateInvoice;
     private cleanNcm;
     private findMvaInRef;
@@ -30,6 +39,7 @@ export declare class IcmsService {
         valor?: number;
         observacoes?: string;
         tipo_imposto?: string;
+        usuario?: string;
     }): Promise<{
         chave_nfe: string;
         data_pagamento: Date;

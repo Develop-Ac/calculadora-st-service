@@ -23,6 +23,9 @@ let IcmsController = class IcmsController {
     async getInvoices(start, end) {
         return this.service.syncInvoices(start, end);
     }
+    async syncLaunchedInvoices() {
+        return this.service.syncLaunchedInvoicesFromEntradaXml();
+    }
     async calculate(body) {
         const results = [];
         for (const xml of body.xmls) {
@@ -70,6 +73,12 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getInvoices", null);
+__decorate([
+    (0, common_1.Post)('nfe-lancadas/sync'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "syncLaunchedInvoices", null);
 __decorate([
     (0, common_1.Post)('calculate'),
     __param(0, (0, common_1.Body)()),

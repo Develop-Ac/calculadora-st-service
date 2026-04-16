@@ -128,12 +128,69 @@ export class IcmsService {
         }
     }
 
+    async syncLaunchedInvoicesFromEntradaXml() {
+        try {
+            const launchedInvoices = await this.fetchEntradaXmlInvoices();
+            let inserted = 0;
+            let skipped = 0;
+
+            for (const inv of launchedInvoices) {
+                const chave = String(inv.CHAVE_NFE || '').trim();
+                if (!chave) {
+                    skipped++;
+                    continue;
+                }
+
+                const normalizedXml = await this.normalizeBlobXml(inv.XML_COMPLETO) || await this.normalizeBlobXml(inv.XML_RESUMO);
+                const parsed = this.extractInvoiceMetadataFromXml(normalizedXml, chave);
+
+                const exists = await this.prisma.nfeConciliacao.findUnique({
+                    where: { chave_nfe: chave },
+                    select: { chave_nfe: true }
+                });
+
+                if (exists) {
+                    skipped++;
+                    continue;
+                }
+
+                await this.prisma.nfeConciliacao.create({
+                    data: {
+                        chave_nfe: chave,
+                        emitente: parsed.emitente,
+                        cnpj_emitente: parsed.cnpjEmitente,
+                        data_emissao: parsed.dataEmissao,
+                        valor_total: parsed.valorTotal,
+                        xml_completo: parsed.xmlCompleto,
+                        status_erp: 'LANCADA',
+                        tipo_operacao: parsed.tipoOperacao,
+                        tipo_operacao_desc: parsed.tipoOperacaoDesc,
+                    }
+                });
+
+                inserted++;
+            }
+
+            return {
+                totalEncontradas: launchedInvoices.length,
+                inseridas: inserted,
+                ignoradas: skipped,
+            };
+        } catch (error) {
+            this.logger.error('Error syncing launched invoices from NF_ENTRADA_XML', error, 'Sync');
+            throw error;
+        }
+    }
+
 
     /* Renamed original fetchInvoices to fetchErpInvoices */
     async fetchErpInvoices(start?: string, end?: string) {
         // ... (Original OpenQuery Logic) ...
-        const dtInicio = start ? start : new Date().toISOString().slice(0, 10);
-        const dtFim = end ? end : new Date().toISOString().slice(0, 10);
+        const startFilter = this.toFirebirdDateOrNull(start);
+        const endFilter = this.toFirebirdDateOrNull(end);
+        const dateClause = startFilter && endFilter
+            ? ` AND NFD.DATA_EMISSAO BETWEEN '${startFilter}' AND '${endFilter}'`
+            : ` AND NFD.DATA_EMISSAO > '01.01.2025'`;
 
         const sql = `
       SELECT 
@@ -157,7 +214,7 @@ export class IcmsService {
             AND X.CHAVE_NFE = NFD.CHAVE_NFE
       WHERE NFD.IMPORTADA    = 'N'
         AND NFD.EMPRESA      = 1
-        AND NFD.DATA_EMISSAO > '01.01.2025'
+                ${dateClause}
         order by NFD.DATA_EMISSAO desc
     `;
 
@@ -168,15 +225,32 @@ export class IcmsService {
 
         try {
             const rows = await this.openQuery.query<any>(tsql, {});
-            const filtered = [];
-            for (const row of rows) {
-                if (await this.isInterstateInvoice(row)) {
-                    filtered.push(row);
-                }
-            }
-            return filtered;
+            return rows;
         } catch (e) {
             this.logger.error("Error fetching ERP invoices", e);
+            return [];
+        }
+    }
+
+    async fetchEntradaXmlInvoices() {
+        const sql = `
+      SELECT
+          X.EMPRESA,
+          X.CHAVE_NFE,
+          X.XML_RESUMO,
+          X.XML_COMPLETO
+      FROM NF_ENTRADA_XML X
+      WHERE X.EMPRESA = 1
+      ORDER BY X.CHAVE_NFE DESC
+    `;
+
+        const firebirdSql = sql.replace(/'/g, "''");
+        const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+
+        try {
+            return await this.openQuery.query<any>(tsql, {});
+        } catch (e) {
+            this.logger.error('Error fetching NF_ENTRADA_XML invoices', e);
             return [];
         }
     }
@@ -193,6 +267,62 @@ export class IcmsService {
         } catch (e) {
             return content; // Fallback
         }
+    }
+
+    private async normalizeBlobXml(content: any): Promise<string> {
+        if (!content) return '';
+
+        // mssql pode devolver BLOB como Buffer
+        if (Buffer.isBuffer(content)) {
+            const asText = content.toString('utf-8').trim();
+            if (!asText) return '';
+            return this.decodeXml(asText);
+        }
+
+        const asString = String(content).trim();
+        if (!asString) return '';
+        return this.decodeXml(asString);
+    }
+
+    private toFirebirdDateOrNull(value?: string): string | null {
+        if (!value) return null;
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return null;
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}.${mm}.${yyyy}`;
+    }
+
+    private extractInvoiceMetadataFromXml(xml: string, fallbackChave: string) {
+        const emitente = xml.match(/<xNome>([\s\S]*?)<\/xNome>/)?.[1]?.trim() || 'Desconhecido';
+        const cnpjEmitente = xml.match(/<CNPJ>(\d+)<\/CNPJ>/)?.[1]
+            || xml.match(/<CPF>(\d+)<\/CPF>/)?.[1]
+            || null;
+
+        const dhEmi = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/)?.[1];
+        const dEmi = xml.match(/<dEmi>([^<]+)<\/dEmi>/)?.[1];
+        const dataEmissao = new Date(dhEmi || dEmi || Date.now());
+        const safeDataEmissao = Number.isNaN(dataEmissao.getTime()) ? new Date() : dataEmissao;
+
+        const valorTotal = parseFloat(xml.match(/<vNF>([\d\.]+)<\/vNF>/)?.[1] || '0') || 0;
+
+        const tpNf = parseInt(xml.match(/<tpNF>(\d)<\/tpNF>/)?.[1] || '0', 10);
+        const tipoOperacao = Number.isNaN(tpNf) ? 0 : tpNf;
+        const tipoOperacaoDesc = tipoOperacao === 0 ? 'ENTRADA PRÓPRIA' : 'SAÍDA';
+
+        // Se XML vier vazio/invalido, preserva a chave como fallback de rastreabilidade
+        const finalXml = xml && xml.includes('<') ? xml : `<chave>${fallbackChave}</chave>`;
+
+        return {
+            emitente,
+            cnpjEmitente,
+            dataEmissao: safeDataEmissao,
+            valorTotal,
+            tipoOperacao,
+            tipoOperacaoDesc,
+            xmlCompleto: finalXml,
+        };
     }
 
     private async isInterstateInvoice(row: any): Promise<boolean> {
@@ -461,7 +591,7 @@ export class IcmsService {
         const agruparTipoImposto = await this.prisma.nfeConciliacao.findMany({ select: { chave_nfe: true, tipo_imposto: true } });
         const all = await this.prisma.pagamentoGuia.findMany();
 
-        const mapTipoImposto = {};
+        const mapTipoImposto: Record<string, string> = {};
         for (const nfe of agruparTipoImposto) {
             if (nfe.tipo_imposto) mapTipoImposto[nfe.chave_nfe] = nfe.tipo_imposto;
         }

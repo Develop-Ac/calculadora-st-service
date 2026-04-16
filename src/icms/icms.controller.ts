@@ -13,6 +13,11 @@ export class IcmsController {
         return this.service.syncInvoices(start, end);
     }
 
+    @Post('nfe-lancadas/sync')
+    async syncLaunchedInvoices() {
+        return this.service.syncLaunchedInvoicesFromEntradaXml();
+    }
+
     @Post('calculate')
     async calculate(@Body() body: { xmls: string[] }) {
         // In a real scenario, we might pass keys and fetch XML from DB again, or pass XML content

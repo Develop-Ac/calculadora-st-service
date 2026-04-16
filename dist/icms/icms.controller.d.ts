@@ -16,6 +16,11 @@ export declare class IcmsController {
         XML_COMPLETO: string;
         TIPO_IMPOSTO: string;
     }[]>;
+    syncLaunchedInvoices(): Promise<{
+        totalEncontradas: number;
+        inseridas: number;
+        ignoradas: number;
+    }>;
     calculate(body: {
         xmls: string[];
     }): Promise<any[]>;

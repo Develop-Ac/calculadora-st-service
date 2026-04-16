@@ -147,9 +147,59 @@ let IcmsService = IcmsService_1 = class IcmsService {
             throw error;
         }
     }
+    async syncLaunchedInvoicesFromEntradaXml() {
+        try {
+            const launchedInvoices = await this.fetchEntradaXmlInvoices();
+            let inserted = 0;
+            let skipped = 0;
+            for (const inv of launchedInvoices) {
+                const chave = String(inv.CHAVE_NFE || '').trim();
+                if (!chave) {
+                    skipped++;
+                    continue;
+                }
+                const normalizedXml = await this.normalizeBlobXml(inv.XML_COMPLETO) || await this.normalizeBlobXml(inv.XML_RESUMO);
+                const parsed = this.extractInvoiceMetadataFromXml(normalizedXml, chave);
+                const exists = await this.prisma.nfeConciliacao.findUnique({
+                    where: { chave_nfe: chave },
+                    select: { chave_nfe: true }
+                });
+                if (exists) {
+                    skipped++;
+                    continue;
+                }
+                await this.prisma.nfeConciliacao.create({
+                    data: {
+                        chave_nfe: chave,
+                        emitente: parsed.emitente,
+                        cnpj_emitente: parsed.cnpjEmitente,
+                        data_emissao: parsed.dataEmissao,
+                        valor_total: parsed.valorTotal,
+                        xml_completo: parsed.xmlCompleto,
+                        status_erp: 'LANCADA',
+                        tipo_operacao: parsed.tipoOperacao,
+                        tipo_operacao_desc: parsed.tipoOperacaoDesc,
+                    }
+                });
+                inserted++;
+            }
+            return {
+                totalEncontradas: launchedInvoices.length,
+                inseridas: inserted,
+                ignoradas: skipped,
+            };
+        }
+        catch (error) {
+            this.logger.error('Error syncing launched invoices from NF_ENTRADA_XML', error, 'Sync');
+            throw error;
+        }
+    }
     async fetchErpInvoices(start, end) {
-        const dtInicio = start ? start : new Date().toISOString().slice(0, 10);
-        const dtFim = end ? end : new Date().toISOString().slice(0, 10);
+        const startFilter = this.toFirebirdDateOrNull(start);
+        const endFilter = this.toFirebirdDateOrNull(end);
+        const dateClause = startFilter && endFilter
+            ? ` AND NFD.DATA_EMISSAO BETWEEN '${startFilter}' AND '${endFilter}'`
+            : ` AND NFD.DATA_EMISSAO > '01.01.2025'`;
         const sql = `
       SELECT 
           NFD.EMPRESA,
@@ -172,23 +222,38 @@ let IcmsService = IcmsService_1 = class IcmsService {
             AND X.CHAVE_NFE = NFD.CHAVE_NFE
       WHERE NFD.IMPORTADA    = 'N'
         AND NFD.EMPRESA      = 1
-        AND NFD.DATA_EMISSAO > '01.01.2025'
+                ${dateClause}
         order by NFD.DATA_EMISSAO desc
     `;
         const firebirdSql = sql.replace(/'/g, "''");
         const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
         try {
             const rows = await this.openQuery.query(tsql, {});
-            const filtered = [];
-            for (const row of rows) {
-                if (await this.isInterstateInvoice(row)) {
-                    filtered.push(row);
-                }
-            }
-            return filtered;
+            return rows;
         }
         catch (e) {
             this.logger.error("Error fetching ERP invoices", e);
+            return [];
+        }
+    }
+    async fetchEntradaXmlInvoices() {
+        const sql = `
+      SELECT
+          X.EMPRESA,
+          X.CHAVE_NFE,
+          X.XML_RESUMO,
+          X.XML_COMPLETO
+      FROM NF_ENTRADA_XML X
+      WHERE X.EMPRESA = 1
+      ORDER BY X.CHAVE_NFE DESC
+    `;
+        const firebirdSql = sql.replace(/'/g, "''");
+        const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+        try {
+            return await this.openQuery.query(tsql, {});
+        }
+        catch (e) {
+            this.logger.error('Error fetching NF_ENTRADA_XML invoices', e);
             return [];
         }
     }
@@ -205,6 +270,56 @@ let IcmsService = IcmsService_1 = class IcmsService {
         catch (e) {
             return content;
         }
+    }
+    async normalizeBlobXml(content) {
+        if (!content)
+            return '';
+        if (Buffer.isBuffer(content)) {
+            const asText = content.toString('utf-8').trim();
+            if (!asText)
+                return '';
+            return this.decodeXml(asText);
+        }
+        const asString = String(content).trim();
+        if (!asString)
+            return '';
+        return this.decodeXml(asString);
+    }
+    toFirebirdDateOrNull(value) {
+        if (!value)
+            return null;
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime()))
+            return null;
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}.${mm}.${yyyy}`;
+    }
+    extractInvoiceMetadataFromXml(xml, fallbackChave) {
+        var _a, _b, _c, _d, _e, _f, _g, _h;
+        const emitente = ((_b = (_a = xml.match(/<xNome>([\s\S]*?)<\/xNome>/)) === null || _a === void 0 ? void 0 : _a[1]) === null || _b === void 0 ? void 0 : _b.trim()) || 'Desconhecido';
+        const cnpjEmitente = ((_c = xml.match(/<CNPJ>(\d+)<\/CNPJ>/)) === null || _c === void 0 ? void 0 : _c[1])
+            || ((_d = xml.match(/<CPF>(\d+)<\/CPF>/)) === null || _d === void 0 ? void 0 : _d[1])
+            || null;
+        const dhEmi = (_e = xml.match(/<dhEmi>([^<]+)<\/dhEmi>/)) === null || _e === void 0 ? void 0 : _e[1];
+        const dEmi = (_f = xml.match(/<dEmi>([^<]+)<\/dEmi>/)) === null || _f === void 0 ? void 0 : _f[1];
+        const dataEmissao = new Date(dhEmi || dEmi || Date.now());
+        const safeDataEmissao = Number.isNaN(dataEmissao.getTime()) ? new Date() : dataEmissao;
+        const valorTotal = parseFloat(((_g = xml.match(/<vNF>([\d\.]+)<\/vNF>/)) === null || _g === void 0 ? void 0 : _g[1]) || '0') || 0;
+        const tpNf = parseInt(((_h = xml.match(/<tpNF>(\d)<\/tpNF>/)) === null || _h === void 0 ? void 0 : _h[1]) || '0', 10);
+        const tipoOperacao = Number.isNaN(tpNf) ? 0 : tpNf;
+        const tipoOperacaoDesc = tipoOperacao === 0 ? 'ENTRADA PRÓPRIA' : 'SAÍDA';
+        const finalXml = xml && xml.includes('<') ? xml : `<chave>${fallbackChave}</chave>`;
+        return {
+            emitente,
+            cnpjEmitente,
+            dataEmissao: safeDataEmissao,
+            valorTotal,
+            tipoOperacao,
+            tipoOperacaoDesc,
+            xmlCompleto: finalXml,
+        };
     }
     async isInterstateInvoice(row) {
         const xml = await this.decodeXml(row.XML_COMPLETO);
@@ -252,7 +367,32 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const infNfe = nfe.infNFe;
         const chave = infNfe['$']['Id'].replace('NFe', '');
         const emit = infNfe.emit;
+        const ide = infNfe.ide;
+        const total = infNfe.total.ICMSTot;
         const det = Array.isArray(infNfe.det) ? infNfe.det : [infNfe.det];
+        try {
+            await this.prisma.nfeConciliacao.upsert({
+                where: { chave_nfe: chave },
+                create: {
+                    chave_nfe: chave,
+                    emitente: emit.xNome || 'Desconhecido',
+                    cnpj_emitente: emit.CNPJ || emit.CPF,
+                    data_emissao: new Date(ide.dhEmi || ide.dEmi),
+                    valor_total: parseFloat(total.vNF || 0),
+                    xml_completo: xmlContent,
+                    status_erp: 'UPLOAD',
+                    tipo_operacao: parseInt(ide.tpNF || 0),
+                    tipo_operacao_desc: parseInt(ide.tpNF) === 0 ? 'ENTRADA' : 'SAÍDA'
+                },
+                update: {
+                    xml_completo: xmlContent,
+                    updated_at: new Date()
+                }
+            });
+        }
+        catch (e) {
+            this.logger.error(`Error upserting NFe ${chave} during calculation`, e);
+        }
         const results = [];
         for (const item of det) {
             const prod = item.prod;
@@ -377,6 +517,17 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 data: { tipo_imposto: dto.tipo_imposto }
             }).catch(e => this.logger.error("Error updating tipo_imposto in NfeConciliacao", e));
         }
+        await fetch('http://log-service.acacessorios.local/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                usuario: dto.usuario,
+                setor: 'Compras',
+                tela: 'ICMS ST',
+                acao: 'Create',
+                descricao: `Guia de pagamento salva para NFe ${dto.chaveNfe} com valor ${dto.valor} e observações: ${dto.observacoes}`,
+            }),
+        });
         return result;
     }
     async getPaymentStatusMap() {
