@@ -26,6 +26,19 @@ export declare class IcmsService {
         inseridas: number;
         ignoradas: number;
     }>;
+    getInvoiceByKey(chaveNfe: string): Promise<{
+        EMPRESA: number;
+        CHAVE_NFE: string;
+        NOME_EMITENTE: string;
+        CPF_CNPJ_EMITENTE: string;
+        DATA_EMISSAO: Date;
+        VALOR_TOTAL: number;
+        STATUS_ERP: string;
+        TIPO_OPERACAO: number;
+        TIPO_OPERACAO_DESC: string;
+        XML_COMPLETO: string;
+        TIPO_IMPOSTO: string;
+    }>;
     startLaunchedInvoicesSyncJob(): Promise<{
         jobId: `${string}-${string}-${string}-${string}-${string}`;
     }>;
@@ -73,6 +86,13 @@ export declare class IcmsService {
         valor: number;
         tipo_imposto?: string;
     }>>;
+    getPaymentStatusByKey(chaveNfe: string): Promise<{
+        chaveNfe: string;
+        status: string;
+        valor: number;
+        tipo_imposto: string;
+        data_pagamento: Date;
+    }>;
     generateDanfe(xml: string): Promise<Buffer>;
     generateDanfeZip(invoices: {
         xml: string;

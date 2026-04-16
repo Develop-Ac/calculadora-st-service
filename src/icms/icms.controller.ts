@@ -13,6 +13,15 @@ export class IcmsController {
         return this.service.syncInvoices(start, end);
     }
 
+    @Get('nfe-distribuicao/:chaveNfe')
+    async getInvoiceByKey(@Param('chaveNfe') chaveNfe: string) {
+        const invoice = await this.service.getInvoiceByKey(chaveNfe);
+        if (!invoice) {
+            throw new NotFoundException(`NF não encontrada: ${chaveNfe}`);
+        }
+        return invoice;
+    }
+
     @Post('nfe-lancadas/sync')
     async syncLaunchedInvoices() {
         return this.service.startLaunchedInvoicesSyncJob();
@@ -62,6 +71,16 @@ export class IcmsController {
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();
     }
+
+    @Get('payment-status/:chaveNfe')
+    async getPaymentStatusByKey(@Param('chaveNfe') chaveNfe: string) {
+        const status = await this.service.getPaymentStatusByKey(chaveNfe);
+        if (!status) {
+            throw new NotFoundException(`Status não encontrado para a NF: ${chaveNfe}`);
+        }
+        return status;
+    }
+
     @Post('danfe')
     async generateDanfe(@Body() body: { xml: string }, @Res({ passthrough: true }) res: Response) {
         const buffer = await this.service.generateDanfe(body.xml);

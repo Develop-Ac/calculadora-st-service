@@ -176,6 +176,31 @@ export class IcmsService {
         return this.runLaunchedInvoicesSync();
     }
 
+    async getInvoiceByKey(chaveNfe: string) {
+        const key = String(chaveNfe || '').trim();
+        if (!key) return null;
+
+        const local = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: key }
+        });
+
+        if (!local) return null;
+
+        return {
+            EMPRESA: 1,
+            CHAVE_NFE: local.chave_nfe,
+            NOME_EMITENTE: local.emitente,
+            CPF_CNPJ_EMITENTE: local.cnpj_emitente,
+            DATA_EMISSAO: local.data_emissao,
+            VALOR_TOTAL: local.valor_total,
+            STATUS_ERP: local.status_erp,
+            TIPO_OPERACAO: local.tipo_operacao,
+            TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
+            XML_COMPLETO: local.xml_completo,
+            TIPO_IMPOSTO: local.tipo_imposto,
+        };
+    }
+
     async startLaunchedInvoicesSyncJob() {
         const jobId = randomUUID();
         const startedAt = new Date().toISOString();
@@ -807,6 +832,33 @@ export class IcmsService {
         }
         return map;
     }
+
+    async getPaymentStatusByKey(chaveNfe: string) {
+        const key = String(chaveNfe || '').trim();
+        if (!key) return null;
+
+        const nfe = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: key },
+            select: { tipo_imposto: true }
+        });
+
+        const pagamento = await this.prisma.pagamentoGuia.findUnique({
+            where: { chave_nfe: key }
+        });
+
+        if (!pagamento && !nfe?.tipo_imposto) {
+            return null;
+        }
+
+        return {
+            chaveNfe: key,
+            status: pagamento?.observacoes ?? null,
+            valor: pagamento?.valor ?? null,
+            tipo_imposto: nfe?.tipo_imposto ?? null,
+            data_pagamento: pagamento?.data_pagamento ?? null,
+        };
+    }
+
     async generateDanfe(xml: string): Promise<Buffer> {
         return new Promise(async (resolve, reject) => {
             try {

@@ -183,6 +183,29 @@ let IcmsService = IcmsService_1 = class IcmsService {
     async syncLaunchedInvoicesFromEntradaXml() {
         return this.runLaunchedInvoicesSync();
     }
+    async getInvoiceByKey(chaveNfe) {
+        const key = String(chaveNfe || '').trim();
+        if (!key)
+            return null;
+        const local = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: key }
+        });
+        if (!local)
+            return null;
+        return {
+            EMPRESA: 1,
+            CHAVE_NFE: local.chave_nfe,
+            NOME_EMITENTE: local.emitente,
+            CPF_CNPJ_EMITENTE: local.cnpj_emitente,
+            DATA_EMISSAO: local.data_emissao,
+            VALOR_TOTAL: local.valor_total,
+            STATUS_ERP: local.status_erp,
+            TIPO_OPERACAO: local.tipo_operacao,
+            TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
+            XML_COMPLETO: local.xml_completo,
+            TIPO_IMPOSTO: local.tipo_imposto,
+        };
+    }
     async startLaunchedInvoicesSyncJob() {
         const jobId = (0, crypto_1.randomUUID)();
         const startedAt = new Date().toISOString();
@@ -714,6 +737,29 @@ let IcmsService = IcmsService_1 = class IcmsService {
             };
         }
         return map;
+    }
+    async getPaymentStatusByKey(chaveNfe) {
+        var _a, _b, _c, _d;
+        const key = String(chaveNfe || '').trim();
+        if (!key)
+            return null;
+        const nfe = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: key },
+            select: { tipo_imposto: true }
+        });
+        const pagamento = await this.prisma.pagamentoGuia.findUnique({
+            where: { chave_nfe: key }
+        });
+        if (!pagamento && !(nfe === null || nfe === void 0 ? void 0 : nfe.tipo_imposto)) {
+            return null;
+        }
+        return {
+            chaveNfe: key,
+            status: (_a = pagamento === null || pagamento === void 0 ? void 0 : pagamento.observacoes) !== null && _a !== void 0 ? _a : null,
+            valor: (_b = pagamento === null || pagamento === void 0 ? void 0 : pagamento.valor) !== null && _b !== void 0 ? _b : null,
+            tipo_imposto: (_c = nfe === null || nfe === void 0 ? void 0 : nfe.tipo_imposto) !== null && _c !== void 0 ? _c : null,
+            data_pagamento: (_d = pagamento === null || pagamento === void 0 ? void 0 : pagamento.data_pagamento) !== null && _d !== void 0 ? _d : null,
+        };
     }
     async generateDanfe(xml) {
         return new Promise(async (resolve, reject) => {

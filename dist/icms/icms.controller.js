@@ -23,6 +23,13 @@ let IcmsController = class IcmsController {
     async getInvoices(start, end) {
         return this.service.syncInvoices(start, end);
     }
+    async getInvoiceByKey(chaveNfe) {
+        const invoice = await this.service.getInvoiceByKey(chaveNfe);
+        if (!invoice) {
+            throw new common_1.NotFoundException(`NF não encontrada: ${chaveNfe}`);
+        }
+        return invoice;
+    }
     async syncLaunchedInvoices() {
         return this.service.startLaunchedInvoicesSyncJob();
     }
@@ -54,6 +61,13 @@ let IcmsController = class IcmsController {
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();
     }
+    async getPaymentStatusByKey(chaveNfe) {
+        const status = await this.service.getPaymentStatusByKey(chaveNfe);
+        if (!status) {
+            throw new common_1.NotFoundException(`Status não encontrado para a NF: ${chaveNfe}`);
+        }
+        return status;
+    }
     async generateDanfe(body, res) {
         const buffer = await this.service.generateDanfe(body.xml);
         res.set({
@@ -80,6 +94,13 @@ __decorate([
     __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getInvoices", null);
+__decorate([
+    (0, common_1.Get)('nfe-distribuicao/:chaveNfe'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getInvoiceByKey", null);
 __decorate([
     (0, common_1.Post)('nfe-lancadas/sync'),
     __metadata("design:type", Function),
@@ -113,6 +134,13 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getPaymentStatus", null);
+__decorate([
+    (0, common_1.Get)('payment-status/:chaveNfe'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getPaymentStatusByKey", null);
 __decorate([
     (0, common_1.Post)('danfe'),
     __param(0, (0, common_1.Body)()),
