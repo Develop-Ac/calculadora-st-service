@@ -14,6 +14,7 @@ export declare class IcmsController {
         TIPO_OPERACAO: number;
         TIPO_OPERACAO_DESC: string;
         XML_COMPLETO: string;
+        XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
         TIPO_IMPOSTO: string;
     }[]>;
     getInvoiceByKey(chaveNfe: string): Promise<{
@@ -27,6 +28,7 @@ export declare class IcmsController {
         TIPO_OPERACAO: number;
         TIPO_OPERACAO_DESC: string;
         XML_COMPLETO: string;
+        XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
         TIPO_IMPOSTO: string;
     }>;
     syncLaunchedInvoices(): Promise<{
@@ -39,6 +41,26 @@ export declare class IcmsController {
         processadas: number;
         inseridas: number;
         ignoradas: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    }>;
+    startXmlNormalization(body?: {
+        batchSize?: number;
+    }): Promise<{
+        jobId: `${string}-${string}-${string}-${string}-${string}`;
+        batchSize: number;
+    }>;
+    getXmlNormalizationStatus(jobId: string): Promise<{
+        jobId: string;
+        status: "running" | "completed" | "failed";
+        total: number;
+        processadas: number;
+        normalizadas: number;
+        ignoradas: number;
+        erros: number;
         progresso: number;
         logs: string[];
         startedAt: string;

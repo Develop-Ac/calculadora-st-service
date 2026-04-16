@@ -27,6 +27,20 @@ export class IcmsService {
         completedAt?: string;
         errorMessage?: string;
     }>();
+    private readonly xmlNormalizationJobs = new Map<string, {
+        jobId: string;
+        status: 'running' | 'completed' | 'failed';
+        total: number;
+        processadas: number;
+        normalizadas: number;
+        ignoradas: number;
+        erros: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    }>();
 
     constructor(
         private readonly openQuery: OpenQueryService,
@@ -75,8 +89,13 @@ export class IcmsService {
             for (const inv of erpInvoices) {
                 erpKeys.add(inv.CHAVE_NFE);
                 upsertTasks.push(async () => {
+                    const normalizedXmlCompleto = await this.normalizeBlobXml(inv.XML_COMPLETO);
+                    const normalizedXmlResumo = await this.normalizeBlobXml(inv.XML_RESUMO);
+                    const xmlParaPersistir = normalizedXmlCompleto || normalizedXmlResumo || '';
+                    const xmlParaPersistirCompactado = this.encodeXml(xmlParaPersistir);
+
                     let valorTotal = 0;
-                    const vNfMatch = inv.XML_COMPLETO?.match(/<vNF>([\d\.]+)<\/vNF>/);
+                    const vNfMatch = xmlParaPersistir.match(/<vNF>([\d\.]+)<\/vNF>/);
                     if (vNfMatch) {
                         valorTotal = parseFloat(vNfMatch[1]);
                     }
@@ -89,13 +108,14 @@ export class IcmsService {
                             cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
                             data_emissao: new Date(inv.DATA_EMISSAO),
                             valor_total: valorTotal,
-                            xml_completo: inv.XML_COMPLETO || '',
+                            xml_completo: xmlParaPersistirCompactado,
                             status_erp: 'PENDENTE',
                             tipo_operacao: inv.TIPO_OPERACAO,
                             tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
                         },
                         update: {
                             status_erp: 'PENDENTE',
+                            ...(normalizedXmlCompleto ? { xml_completo: this.encodeXml(normalizedXmlCompleto) } : {}),
                             updated_at: new Date()
                         }
                     });
@@ -147,6 +167,7 @@ export class IcmsService {
                 TIPO_OPERACAO: local.tipo_operacao,
                 TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
                 XML_COMPLETO: local.xml_completo,
+                XML_TIPO: this.detectXmlType(local.xml_completo),
                 TIPO_IMPOSTO: local.tipo_imposto
             }));
         } catch (error) {
@@ -199,8 +220,20 @@ export class IcmsService {
             TIPO_OPERACAO: local.tipo_operacao,
             TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
             XML_COMPLETO: normalizedXml || local.xml_completo,
+            XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
             TIPO_IMPOSTO: local.tipo_imposto,
         };
+    }
+
+    private detectXmlType(xml: string | null | undefined): 'COMPLETO' | 'RESUMO' | 'SEM_XML' {
+        const raw = String(xml || '').trim();
+        if (!raw) return 'SEM_XML';
+
+        const content = raw.toLowerCase();
+        const hasItems = content.includes('<det') && content.includes('<prod');
+        if (hasItems) return 'COMPLETO';
+
+        return 'RESUMO';
     }
 
     async startLaunchedInvoicesSyncJob() {
@@ -228,6 +261,154 @@ export class IcmsService {
 
     getLaunchedInvoicesSyncJob(jobId: string) {
         return this.launchedSyncJobs.get(jobId) ?? null;
+    }
+
+    async startXmlNormalizationJob(batchSize = 500) {
+        const safeBatchSize = Number.isFinite(batchSize) ? Math.min(Math.max(Math.floor(batchSize), 100), 2000) : 500;
+        const jobId = randomUUID();
+        const startedAt = new Date().toISOString();
+
+        this.xmlNormalizationJobs.set(jobId, {
+            jobId,
+            status: 'running',
+            total: 0,
+            processadas: 0,
+            normalizadas: 0,
+            ignoradas: 0,
+            erros: 0,
+            progresso: 0,
+            logs: [`[${startedAt}] Iniciando normalização global de XMLs (batch=${safeBatchSize})...`],
+            startedAt,
+        });
+
+        this.runXmlNormalization(jobId, safeBatchSize).catch((error) => {
+            this.logger.error('Error running XML normalization job', error, 'NormalizeXml');
+        });
+
+        return { jobId, batchSize: safeBatchSize };
+    }
+
+    getXmlNormalizationJob(jobId: string) {
+        return this.xmlNormalizationJobs.get(jobId) ?? null;
+    }
+
+    private appendXmlNormalizationLog(jobId: string, message: string) {
+        const job = this.xmlNormalizationJobs.get(jobId);
+        if (!job) return;
+
+        job.logs.push(`[${new Date().toISOString()}] ${message}`);
+        if (job.logs.length > 300) {
+            job.logs = job.logs.slice(-300);
+        }
+        this.xmlNormalizationJobs.set(jobId, job);
+    }
+
+    private async runXmlNormalization(jobId: string, batchSize: number) {
+        try {
+            const total = await this.prisma.nfeConciliacao.count();
+            const initialJob = this.xmlNormalizationJobs.get(jobId);
+            if (!initialJob) return;
+
+            initialJob.total = total;
+            this.xmlNormalizationJobs.set(jobId, initialJob);
+            this.appendXmlNormalizationLog(jobId, `Total de notas para verificar: ${total}`);
+
+            let cursor: string | undefined;
+            let processadas = 0;
+            let normalizadas = 0;
+            let ignoradas = 0;
+            let erros = 0;
+
+            while (true) {
+                const rows = await this.prisma.nfeConciliacao.findMany({
+                    select: { chave_nfe: true, xml_completo: true },
+                    orderBy: { chave_nfe: 'asc' },
+                    take: batchSize,
+                    ...(cursor ? { cursor: { chave_nfe: cursor }, skip: 1 } : {}),
+                });
+
+                if (!rows.length) break;
+
+                for (const row of rows) {
+                    const raw = String(row.xml_completo || '').trim();
+
+                    try {
+                        if (!raw) {
+                            ignoradas++;
+                            processadas++;
+                            continue;
+                        }
+
+                        if (raw.startsWith('<')) {
+                            const compressed = this.encodeXml(raw);
+                            await this.prisma.nfeConciliacao.update({
+                                where: { chave_nfe: row.chave_nfe },
+                                data: { xml_completo: compressed },
+                            });
+                            normalizadas++;
+                        } else {
+                            const decoded = await this.decodeXml(raw);
+                            if (decoded && decoded.trim().startsWith('<')) {
+                                // Já compactado/decodificável para XML: mantemos como está.
+                                ignoradas++;
+                            } else {
+                                // Conteúdo inválido ou inesperado, não alteramos automaticamente.
+                                ignoradas++;
+                                erros++;
+                            }
+                        }
+                    } catch {
+                        erros++;
+                    }
+
+                    processadas++;
+                }
+
+                cursor = rows[rows.length - 1].chave_nfe;
+
+                const job = this.xmlNormalizationJobs.get(jobId);
+                if (!job) return;
+
+                job.processadas = processadas;
+                job.normalizadas = normalizadas;
+                job.ignoradas = ignoradas;
+                job.erros = erros;
+                job.progresso = total === 0 ? 100 : Math.round((processadas / total) * 100);
+                this.xmlNormalizationJobs.set(jobId, job);
+
+                this.appendXmlNormalizationLog(
+                    jobId,
+                    `Lote concluído. Processadas ${processadas}/${total} | normalizadas ${normalizadas} | ignoradas ${ignoradas} | erros ${erros}`,
+                );
+            }
+
+            const job = this.xmlNormalizationJobs.get(jobId);
+            if (!job) return;
+
+            job.status = 'completed';
+            job.processadas = processadas;
+            job.normalizadas = normalizadas;
+            job.ignoradas = ignoradas;
+            job.erros = erros;
+            job.progresso = 100;
+            job.completedAt = new Date().toISOString();
+            this.xmlNormalizationJobs.set(jobId, job);
+
+            this.appendXmlNormalizationLog(
+                jobId,
+                `Concluído. Normalizadas: ${normalizadas}. Ignoradas: ${ignoradas}. Erros: ${erros}.`,
+            );
+        } catch (error) {
+            const job = this.xmlNormalizationJobs.get(jobId);
+            if (job) {
+                job.status = 'failed';
+                job.completedAt = new Date().toISOString();
+                job.errorMessage = error instanceof Error ? error.message : String(error);
+                this.xmlNormalizationJobs.set(jobId, job);
+            }
+            this.appendXmlNormalizationLog(jobId, `Falha na normalização: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
+        }
     }
 
     private appendJobLog(jobId: string | undefined, message: string) {
@@ -288,6 +469,7 @@ export class IcmsService {
 
                     const normalizedXml = await this.normalizeBlobXml(inv.XML_COMPLETO) || await this.normalizeBlobXml(inv.XML_RESUMO);
                     const parsed = this.extractInvoiceMetadataFromXml(normalizedXml, chave);
+                    const parsedXmlCompactado = this.encodeXml(parsed.xmlCompleto);
 
                     try {
                         await this.prisma.nfeConciliacao.create({
@@ -297,7 +479,7 @@ export class IcmsService {
                                 cnpj_emitente: parsed.cnpjEmitente,
                                 data_emissao: parsed.dataEmissao,
                                 valor_total: parsed.valorTotal,
-                                xml_completo: parsed.xmlCompleto,
+                                xml_completo: parsedXmlCompactado,
                                 status_erp: 'LANCADA',
                                 tipo_operacao: parsed.tipoOperacao,
                                 tipo_operacao_desc: parsed.tipoOperacaoDesc,
@@ -392,6 +574,7 @@ export class IcmsService {
               WHEN NFD.TIPO_OPERACAO = 1 THEN 'SAÍDA'
               ELSE 'OUTROS'
           END AS TIPO_OPERACAO_DESC,
+          X.XML_RESUMO,
           X.XML_COMPLETO
       FROM NFE_DISTRIBUICAO NFD
       LEFT JOIN NF_ENTRADA_XML X
@@ -495,6 +678,15 @@ export class IcmsService {
         } catch (e) {
             return content; // Fallback
         }
+    }
+
+    private encodeXml(xml: string): string {
+        const content = String(xml || '').trim();
+        if (!content) return '';
+        if (!content.startsWith('<')) return content;
+
+        const gz = zlib.gzipSync(Buffer.from(content, 'utf-8'));
+        return gz.toString('base64');
     }
 
     private async normalizeBlobXml(content: any): Promise<string> {
@@ -620,6 +812,7 @@ export class IcmsService {
         // --- UPSERT INTO NfeConciliacao ---
         // This ensures that even XML-uploaded notes exist in the DB for status tracking
         try {
+            const compressedXml = this.encodeXml(xmlStr);
             await this.prisma.nfeConciliacao.upsert({
                 where: { chave_nfe: chave },
                 create: {
@@ -628,14 +821,14 @@ export class IcmsService {
                     cnpj_emitente: emit.CNPJ || emit.CPF,
                     data_emissao: new Date(ide.dhEmi || ide.dEmi),
                     valor_total: parseFloat(total.vNF || 0),
-                    xml_completo: xmlContent, // Store original (decoded if was base64)
+                    xml_completo: compressedXml,
                     status_erp: 'UPLOAD', // Mark as upload to distinguish
                     tipo_operacao: parseInt(ide.tpNF || 0),
                     tipo_operacao_desc: parseInt(ide.tpNF) === 0 ? 'ENTRADA' : 'SAÍDA'
                 },
                 update: {
                     // Update XML if it changed or to ensure it's there
-                    xml_completo: xmlContent,
+                    xml_completo: compressedXml,
                     updated_at: new Date()
                 }
             });

@@ -36,6 +36,20 @@ export class IcmsController {
         return status;
     }
 
+    @Post('xml/normalize')
+    async startXmlNormalization(@Body() body?: { batchSize?: number }) {
+        return this.service.startXmlNormalizationJob(body?.batchSize ?? 500);
+    }
+
+    @Get('xml/normalize/:jobId')
+    async getXmlNormalizationStatus(@Param('jobId') jobId: string) {
+        const status = this.service.getXmlNormalizationJob(jobId);
+        if (!status) {
+            throw new NotFoundException(`Job não encontrado: ${jobId}`);
+        }
+        return status;
+    }
+
     @Post('calculate')
     async calculate(@Body() body: { xmls: string[] }) {
         // In a real scenario, we might pass keys and fetch XML from DB again, or pass XML content

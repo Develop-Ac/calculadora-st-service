@@ -40,6 +40,17 @@ let IcmsController = class IcmsController {
         }
         return status;
     }
+    async startXmlNormalization(body) {
+        var _a;
+        return this.service.startXmlNormalizationJob((_a = body === null || body === void 0 ? void 0 : body.batchSize) !== null && _a !== void 0 ? _a : 500);
+    }
+    async getXmlNormalizationStatus(jobId) {
+        const status = this.service.getXmlNormalizationJob(jobId);
+        if (!status) {
+            throw new common_1.NotFoundException(`Job não encontrado: ${jobId}`);
+        }
+        return status;
+    }
     async calculate(body) {
         const results = [];
         for (const xml of body.xmls) {
@@ -114,6 +125,20 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getSyncLaunchedInvoicesStatus", null);
+__decorate([
+    (0, common_1.Post)('xml/normalize'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "startXmlNormalization", null);
+__decorate([
+    (0, common_1.Get)('xml/normalize/:jobId'),
+    __param(0, (0, common_1.Param)('jobId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getXmlNormalizationStatus", null);
 __decorate([
     (0, common_1.Post)('calculate'),
     __param(0, (0, common_1.Body)()),
