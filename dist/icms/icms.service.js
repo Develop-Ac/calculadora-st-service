@@ -85,51 +85,68 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.logger.log(`Loaded ${this.refData.length} reference MVA items.`);
     }
     async syncInvoices(start, end) {
-        var _a;
         try {
+            const { startDate, endDate } = this.getDateRangeOrDefault(start, end);
             const erpInvoices = await this.fetchErpInvoices(start, end);
             this.logger.log(`Fetched ${erpInvoices.length} invoices from ERP`, 'Sync');
             const erpKeys = new Set();
+            const upsertTasks = [];
             for (const inv of erpInvoices) {
                 erpKeys.add(inv.CHAVE_NFE);
-                let valorTotal = 0;
-                const vNfMatch = (_a = inv.XML_COMPLETO) === null || _a === void 0 ? void 0 : _a.match(/<vNF>([\d\.]+)<\/vNF>/);
-                if (vNfMatch) {
-                    valorTotal = parseFloat(vNfMatch[1]);
-                }
-                await this.prisma.nfeConciliacao.upsert({
-                    where: { chave_nfe: inv.CHAVE_NFE },
-                    create: {
-                        chave_nfe: inv.CHAVE_NFE,
-                        emitente: inv.NOME_EMITENTE || 'Desconhecido',
-                        cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
-                        data_emissao: new Date(inv.DATA_EMISSAO),
-                        valor_total: valorTotal,
-                        xml_completo: inv.XML_COMPLETO || '',
-                        status_erp: 'PENDENTE',
-                        tipo_operacao: inv.TIPO_OPERACAO,
-                        tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
-                    },
-                    update: {
-                        status_erp: 'PENDENTE',
-                        updated_at: new Date()
+                upsertTasks.push(async () => {
+                    var _a;
+                    let valorTotal = 0;
+                    const vNfMatch = (_a = inv.XML_COMPLETO) === null || _a === void 0 ? void 0 : _a.match(/<vNF>([\d\.]+)<\/vNF>/);
+                    if (vNfMatch) {
+                        valorTotal = parseFloat(vNfMatch[1]);
                     }
+                    await this.prisma.nfeConciliacao.upsert({
+                        where: { chave_nfe: inv.CHAVE_NFE },
+                        create: {
+                            chave_nfe: inv.CHAVE_NFE,
+                            emitente: inv.NOME_EMITENTE || 'Desconhecido',
+                            cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
+                            data_emissao: new Date(inv.DATA_EMISSAO),
+                            valor_total: valorTotal,
+                            xml_completo: inv.XML_COMPLETO || '',
+                            status_erp: 'PENDENTE',
+                            tipo_operacao: inv.TIPO_OPERACAO,
+                            tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
+                        },
+                        update: {
+                            status_erp: 'PENDENTE',
+                            updated_at: new Date()
+                        }
+                    });
                 });
             }
-            const pendingLocal = await this.prisma.nfeConciliacao.findMany({
-                where: { status_erp: 'PENDENTE' },
-                select: { chave_nfe: true }
-            });
-            for (const local of pendingLocal) {
-                if (!erpKeys.has(local.chave_nfe)) {
-                    await this.prisma.nfeConciliacao.update({
-                        where: { chave_nfe: local.chave_nfe },
-                        data: { status_erp: 'LANCADA' }
-                    });
-                }
+            const upsertBatchSize = 20;
+            for (let i = 0; i < upsertTasks.length; i += upsertBatchSize) {
+                const chunk = upsertTasks.slice(i, i + upsertBatchSize);
+                await Promise.all(chunk.map(task => task()));
+            }
+            if (erpKeys.size > 0) {
+                await this.prisma.nfeConciliacao.updateMany({
+                    where: {
+                        status_erp: 'PENDENTE',
+                        data_emissao: {
+                            gte: startDate,
+                            lte: endDate,
+                        },
+                        chave_nfe: { notIn: Array.from(erpKeys) },
+                    },
+                    data: { status_erp: 'LANCADA' }
+                });
             }
             const allLocal = await this.prisma.nfeConciliacao.findMany({
-                orderBy: { data_emissao: 'desc' }
+                where: {
+                    data_emissao: {
+                        gte: startDate,
+                        lte: endDate,
+                    }
+                },
+                orderBy: { data_emissao: 'desc' },
+                take: 1200
             });
             return allLocal.map(local => ({
                 CHAVE_NFE: local.chave_nfe,
@@ -148,6 +165,20 @@ let IcmsService = IcmsService_1 = class IcmsService {
             this.logger.error('Error in syncInvoices', error, 'Sync');
             throw error;
         }
+    }
+    getDateRangeOrDefault(start, end) {
+        const safeEnd = end ? new Date(`${end}T23:59:59.999`) : new Date();
+        const parsedEnd = Number.isNaN(safeEnd.getTime()) ? new Date() : safeEnd;
+        const safeStart = start
+            ? new Date(`${start}T00:00:00`)
+            : new Date(parsedEnd.getTime() - (90 * 24 * 60 * 60 * 1000));
+        const parsedStart = Number.isNaN(safeStart.getTime())
+            ? new Date(parsedEnd.getTime() - (90 * 24 * 60 * 60 * 1000))
+            : safeStart;
+        return {
+            startDate: parsedStart,
+            endDate: parsedEnd,
+        };
     }
     async syncLaunchedInvoicesFromEntradaXml() {
         return this.runLaunchedInvoicesSync();

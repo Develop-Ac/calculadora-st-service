@@ -63,65 +63,78 @@ export class IcmsService {
     // --- ETL / SYNC ---
     async syncInvoices(start?: string, end?: string) {
         try {
+            const { startDate, endDate } = this.getDateRangeOrDefault(start, end);
+
             // 1. Fetch from ERP (OpenQuery)
             const erpInvoices = await this.fetchErpInvoices(start, end);
             this.logger.log(`Fetched ${erpInvoices.length} invoices from ERP`, 'Sync');
             const erpKeys = new Set<string>();
 
             // 2. Upsert ERP items to Local DB
+            const upsertTasks: Array<() => Promise<void>> = [];
             for (const inv of erpInvoices) {
                 erpKeys.add(inv.CHAVE_NFE);
-
-                // Extract Value from XML if possible, or use 0
-                let valorTotal = 0;
-                // distinct namespace handling might be needed
-                const vNfMatch = inv.XML_COMPLETO?.match(/<vNF>([\d\.]+)<\/vNF>/);
-                if (vNfMatch) {
-                    valorTotal = parseFloat(vNfMatch[1]);
-                }
-
-                // Upsert
-                await this.prisma.nfeConciliacao.upsert({
-                    where: { chave_nfe: inv.CHAVE_NFE },
-                    create: {
-                        chave_nfe: inv.CHAVE_NFE,
-                        emitente: inv.NOME_EMITENTE || 'Desconhecido',
-                        cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
-                        data_emissao: new Date(inv.DATA_EMISSAO), // Ensure date format
-                        valor_total: valorTotal,
-                        xml_completo: inv.XML_COMPLETO || '',
-                        status_erp: 'PENDENTE',
-                        tipo_operacao: inv.TIPO_OPERACAO,
-                        tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
-                    },
-                    update: {
-                        // Update PENDENTE items logic? If it was LANCADA and reappeared?
-                        // If it is in ERP, it's PENDENTE.
-                        status_erp: 'PENDENTE',
-                        updated_at: new Date()
+                upsertTasks.push(async () => {
+                    let valorTotal = 0;
+                    const vNfMatch = inv.XML_COMPLETO?.match(/<vNF>([\d\.]+)<\/vNF>/);
+                    if (vNfMatch) {
+                        valorTotal = parseFloat(vNfMatch[1]);
                     }
+
+                    await this.prisma.nfeConciliacao.upsert({
+                        where: { chave_nfe: inv.CHAVE_NFE },
+                        create: {
+                            chave_nfe: inv.CHAVE_NFE,
+                            emitente: inv.NOME_EMITENTE || 'Desconhecido',
+                            cnpj_emitente: inv.CPF_CNPJ_EMITENTE,
+                            data_emissao: new Date(inv.DATA_EMISSAO),
+                            valor_total: valorTotal,
+                            xml_completo: inv.XML_COMPLETO || '',
+                            status_erp: 'PENDENTE',
+                            tipo_operacao: inv.TIPO_OPERACAO,
+                            tipo_operacao_desc: inv.TIPO_OPERACAO_DESC
+                        },
+                        update: {
+                            status_erp: 'PENDENTE',
+                            updated_at: new Date()
+                        }
+                    });
                 });
             }
 
-            // 3. Detect Missing Items (LANCADA)
-            // Find items that are PENDENTE locally but NOT in erpInvoices
-            const pendingLocal = await this.prisma.nfeConciliacao.findMany({
-                where: { status_erp: 'PENDENTE' },
-                select: { chave_nfe: true }
-            });
+            const upsertBatchSize = 20;
+            for (let i = 0; i < upsertTasks.length; i += upsertBatchSize) {
+                const chunk = upsertTasks.slice(i, i + upsertBatchSize);
+                await Promise.all(chunk.map(task => task()));
+            }
 
-            for (const local of pendingLocal) {
-                if (!erpKeys.has(local.chave_nfe)) {
-                    await this.prisma.nfeConciliacao.update({
-                        where: { chave_nfe: local.chave_nfe },
-                        data: { status_erp: 'LANCADA' }
-                    });
-                }
+            // 3. Detect Missing Items (LANCADA)
+            // Atualiza em massa no recorte da consulta para evitar varrer histórico inteiro
+            if (erpKeys.size > 0) {
+                await this.prisma.nfeConciliacao.updateMany({
+                    where: {
+                        status_erp: 'PENDENTE',
+                        data_emissao: {
+                            gte: startDate,
+                            lte: endDate,
+                        },
+                        chave_nfe: { notIn: Array.from(erpKeys) },
+                    },
+                    data: { status_erp: 'LANCADA' }
+                });
             }
 
             // 4. Return Merged List
             const allLocal = await this.prisma.nfeConciliacao.findMany({
+                where: {
+                    data_emissao: {
+                        gte: startDate,
+                        lte: endDate,
+                    }
+                },
                 orderBy: { data_emissao: 'desc' }
+                ,
+                take: 1200
             });
 
             return allLocal.map(local => ({
@@ -140,6 +153,23 @@ export class IcmsService {
             this.logger.error('Error in syncInvoices', error, 'Sync');
             throw error;
         }
+    }
+
+    private getDateRangeOrDefault(start?: string, end?: string) {
+        const safeEnd = end ? new Date(`${end}T23:59:59.999`) : new Date();
+        const parsedEnd = Number.isNaN(safeEnd.getTime()) ? new Date() : safeEnd;
+
+        const safeStart = start
+            ? new Date(`${start}T00:00:00`)
+            : new Date(parsedEnd.getTime() - (90 * 24 * 60 * 60 * 1000));
+        const parsedStart = Number.isNaN(safeStart.getTime())
+            ? new Date(parsedEnd.getTime() - (90 * 24 * 60 * 60 * 1000))
+            : safeStart;
+
+        return {
+            startDate: parsedStart,
+            endDate: parsedEnd,
+        };
     }
 
     async syncLaunchedInvoicesFromEntradaXml() {

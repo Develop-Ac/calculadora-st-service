@@ -20,6 +20,7 @@ export declare class IcmsService {
         XML_COMPLETO: string;
         TIPO_IMPOSTO: string;
     }[]>;
+    private getDateRangeOrDefault;
     syncLaunchedInvoicesFromEntradaXml(): Promise<{
         totalEncontradas: number;
         inseridas: number;
