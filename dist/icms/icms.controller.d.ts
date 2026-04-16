@@ -17,9 +17,23 @@ export declare class IcmsController {
         TIPO_IMPOSTO: string;
     }[]>;
     syncLaunchedInvoices(): Promise<{
+        jobId: `${string}-${string}-${string}-${string}-${string}`;
+    }>;
+    getSyncLaunchedInvoicesStatus(jobId: string): Promise<{
+        jobId: string;
+        status: "running" | "completed" | "failed";
         totalEncontradas: number;
+        processadas: number;
         inseridas: number;
         ignoradas: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    } | {
+        message: string;
+        jobId: string;
     }>;
     calculate(body: {
         xmls: string[];

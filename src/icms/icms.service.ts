@@ -3,6 +3,7 @@ import { OpenQueryService } from '../shared/database/openquery/openquery.service
 import { PrismaService } from '../prisma/prisma.service';
 import * as xml2js from 'xml2js';
 import * as zlib from 'zlib'; // for gzip
+import { randomUUID } from 'crypto';
 import { CSV_DATA_CLEAN } from './constants/mva-data';
 // @ts-ignore
 import { gerarPDF } from '@alexssmusica/node-pdf-nfe';
@@ -13,6 +14,19 @@ import { Writable } from 'stream';
 export class IcmsService {
     private readonly logger = new Logger(IcmsService.name);
     private refData: any[] = [];
+    private readonly launchedSyncJobs = new Map<string, {
+        jobId: string;
+        status: 'running' | 'completed' | 'failed';
+        totalEncontradas: number;
+        processadas: number;
+        inseridas: number;
+        ignoradas: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    }>();
 
     constructor(
         private readonly openQuery: OpenQueryService,
@@ -129,15 +143,78 @@ export class IcmsService {
     }
 
     async syncLaunchedInvoicesFromEntradaXml() {
+        return this.runLaunchedInvoicesSync();
+    }
+
+    async startLaunchedInvoicesSyncJob() {
+        const jobId = randomUUID();
+        const startedAt = new Date().toISOString();
+
+        this.launchedSyncJobs.set(jobId, {
+            jobId,
+            status: 'running',
+            totalEncontradas: 0,
+            processadas: 0,
+            inseridas: 0,
+            ignoradas: 0,
+            progresso: 0,
+            logs: [`[${startedAt}] Iniciando busca de NFs lançadas...`],
+            startedAt,
+        });
+
+        this.runLaunchedInvoicesSync(jobId).catch((error) => {
+            this.logger.error('Error running launched invoices sync job', error, 'Sync');
+        });
+
+        return { jobId };
+    }
+
+    getLaunchedInvoicesSyncJob(jobId: string) {
+        return this.launchedSyncJobs.get(jobId) ?? null;
+    }
+
+    private appendJobLog(jobId: string | undefined, message: string) {
+        if (!jobId) return;
+        const job = this.launchedSyncJobs.get(jobId);
+        if (!job) return;
+
+        job.logs.push(`[${new Date().toISOString()}] ${message}`);
+        if (job.logs.length > 200) {
+            job.logs = job.logs.slice(-200);
+        }
+        this.launchedSyncJobs.set(jobId, job);
+    }
+
+    private async runLaunchedInvoicesSync(jobId?: string) {
         try {
             const launchedInvoices = await this.fetchEntradaXmlInvoices();
             let inserted = 0;
             let skipped = 0;
 
-            for (const inv of launchedInvoices) {
+            if (jobId) {
+                const job = this.launchedSyncJobs.get(jobId);
+                if (job) {
+                    job.totalEncontradas = launchedInvoices.length;
+                    job.progresso = launchedInvoices.length === 0 ? 100 : 0;
+                    this.launchedSyncJobs.set(jobId, job);
+                }
+                this.appendJobLog(jobId, `Total de notas encontradas na NF_ENTRADA_XML: ${launchedInvoices.length}`);
+            }
+
+            for (let index = 0; index < launchedInvoices.length; index++) {
+                const inv = launchedInvoices[index];
                 const chave = String(inv.CHAVE_NFE || '').trim();
                 if (!chave) {
                     skipped++;
+                    if (jobId) {
+                        const job = this.launchedSyncJobs.get(jobId);
+                        if (job) {
+                            job.processadas = index + 1;
+                            job.ignoradas = skipped;
+                            job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
+                            this.launchedSyncJobs.set(jobId, job);
+                        }
+                    }
                     continue;
                 }
 
@@ -151,6 +228,16 @@ export class IcmsService {
 
                 if (exists) {
                     skipped++;
+                    if (jobId) {
+                        const job = this.launchedSyncJobs.get(jobId);
+                        if (job) {
+                            job.processadas = index + 1;
+                            job.inseridas = inserted;
+                            job.ignoradas = skipped;
+                            job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
+                            this.launchedSyncJobs.set(jobId, job);
+                        }
+                    }
                     continue;
                 }
 
@@ -169,6 +256,35 @@ export class IcmsService {
                 });
 
                 inserted++;
+
+                if (jobId) {
+                    const job = this.launchedSyncJobs.get(jobId);
+                    if (job) {
+                        job.processadas = index + 1;
+                        job.inseridas = inserted;
+                        job.ignoradas = skipped;
+                        job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
+                        this.launchedSyncJobs.set(jobId, job);
+                    }
+                }
+
+                if (jobId && ((index + 1) % 50 === 0 || index === launchedInvoices.length - 1)) {
+                    this.appendJobLog(jobId, `Processadas ${index + 1}/${launchedInvoices.length} (inseridas: ${inserted}, ignoradas: ${skipped})`);
+                }
+            }
+
+            if (jobId) {
+                const job = this.launchedSyncJobs.get(jobId);
+                if (job) {
+                    job.status = 'completed';
+                    job.processadas = launchedInvoices.length;
+                    job.inseridas = inserted;
+                    job.ignoradas = skipped;
+                    job.progresso = 100;
+                    job.completedAt = new Date().toISOString();
+                    this.launchedSyncJobs.set(jobId, job);
+                }
+                this.appendJobLog(jobId, `Concluído. Inseridas: ${inserted}. Ignoradas: ${skipped}.`);
             }
 
             return {
@@ -178,6 +294,18 @@ export class IcmsService {
             };
         } catch (error) {
             this.logger.error('Error syncing launched invoices from NF_ENTRADA_XML', error, 'Sync');
+
+            if (jobId) {
+                const job = this.launchedSyncJobs.get(jobId);
+                if (job) {
+                    job.status = 'failed';
+                    job.completedAt = new Date().toISOString();
+                    job.errorMessage = error instanceof Error ? error.message : String(error);
+                    this.launchedSyncJobs.set(jobId, job);
+                }
+                this.appendJobLog(jobId, `Falha na sincronização: ${error instanceof Error ? error.message : String(error)}`);
+            }
+
             throw error;
         }
     }

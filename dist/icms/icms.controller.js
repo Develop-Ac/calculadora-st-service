@@ -24,7 +24,14 @@ let IcmsController = class IcmsController {
         return this.service.syncInvoices(start, end);
     }
     async syncLaunchedInvoices() {
-        return this.service.syncLaunchedInvoicesFromEntradaXml();
+        return this.service.startLaunchedInvoicesSyncJob();
+    }
+    async getSyncLaunchedInvoicesStatus(jobId) {
+        const status = this.service.getLaunchedInvoicesSyncJob(jobId);
+        if (!status) {
+            return { message: 'Job não encontrado', jobId };
+        }
+        return status;
     }
     async calculate(body) {
         const results = [];
@@ -79,6 +86,13 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "syncLaunchedInvoices", null);
+__decorate([
+    (0, common_1.Get)('nfe-lancadas/sync/:jobId'),
+    __param(0, (0, common_1.Param)('jobId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getSyncLaunchedInvoicesStatus", null);
 __decorate([
     (0, common_1.Post)('calculate'),
     __param(0, (0, common_1.Body)()),

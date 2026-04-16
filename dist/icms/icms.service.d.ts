@@ -5,6 +5,7 @@ export declare class IcmsService {
     private readonly prisma;
     private readonly logger;
     private refData;
+    private readonly launchedSyncJobs;
     constructor(openQuery: OpenQueryService, prisma: PrismaService);
     private parseReferenceData;
     syncInvoices(start?: string, end?: string): Promise<{
@@ -24,6 +25,24 @@ export declare class IcmsService {
         inseridas: number;
         ignoradas: number;
     }>;
+    startLaunchedInvoicesSyncJob(): Promise<{
+        jobId: `${string}-${string}-${string}-${string}-${string}`;
+    }>;
+    getLaunchedInvoicesSyncJob(jobId: string): {
+        jobId: string;
+        status: "running" | "completed" | "failed";
+        totalEncontradas: number;
+        processadas: number;
+        inseridas: number;
+        ignoradas: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    };
+    private appendJobLog;
+    private runLaunchedInvoicesSync;
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
     fetchEntradaXmlInvoices(): Promise<any[]>;
     private decodeXml;
