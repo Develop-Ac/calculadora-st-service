@@ -186,6 +186,8 @@ export class IcmsService {
 
         if (!local) return null;
 
+        const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+
         return {
             EMPRESA: 1,
             CHAVE_NFE: local.chave_nfe,
@@ -196,7 +198,7 @@ export class IcmsService {
             STATUS_ERP: local.status_erp,
             TIPO_OPERACAO: local.tipo_operacao,
             TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-            XML_COMPLETO: local.xml_completo,
+            XML_COMPLETO: normalizedXml || local.xml_completo,
             TIPO_IMPOSTO: local.tipo_imposto,
         };
     }
