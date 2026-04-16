@@ -31,9 +31,6 @@ export declare class IcmsController {
         startedAt: string;
         completedAt?: string;
         errorMessage?: string;
-    } | {
-        message: string;
-        jobId: string;
     }>;
     calculate(body: {
         xmls: string[];

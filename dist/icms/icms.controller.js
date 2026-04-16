@@ -29,7 +29,7 @@ let IcmsController = class IcmsController {
     async getSyncLaunchedInvoicesStatus(jobId) {
         const status = this.service.getLaunchedInvoicesSyncJob(jobId);
         if (!status) {
-            return { message: 'Job não encontrado', jobId };
+            throw new common_1.NotFoundException(`Job não encontrado: ${jobId}`);
         }
         return status;
     }

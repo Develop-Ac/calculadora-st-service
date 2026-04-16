@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, StreamableFile, Res } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, StreamableFile, Res } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
@@ -22,7 +22,7 @@ export class IcmsController {
     async getSyncLaunchedInvoicesStatus(@Param('jobId') jobId: string) {
         const status = this.service.getLaunchedInvoicesSyncJob(jobId);
         if (!status) {
-            return { message: 'Job não encontrado', jobId };
+            throw new NotFoundException(`Job não encontrado: ${jobId}`);
         }
         return status;
     }
