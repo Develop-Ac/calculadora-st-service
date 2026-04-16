@@ -45,6 +45,8 @@ export declare class IcmsService {
     private runLaunchedInvoicesSync;
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
     fetchEntradaXmlInvoices(): Promise<any[]>;
+    fetchEntradaXmlKeys(): Promise<string[]>;
+    fetchEntradaXmlInvoicesByKeys(keys: string[]): Promise<any[]>;
     private decodeXml;
     private normalizeBlobXml;
     private toFirebirdDateOrNull;

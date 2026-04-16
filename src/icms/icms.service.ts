@@ -187,89 +187,89 @@ export class IcmsService {
 
     private async runLaunchedInvoicesSync(jobId?: string) {
         try {
-            const launchedInvoices = await this.fetchEntradaXmlInvoices();
+            this.appendJobLog(jobId, 'Consultando chaves na NF_ENTRADA_XML (empresa=1)...');
+            const allEntradaKeys = await this.fetchEntradaXmlKeys();
+
+            this.appendJobLog(jobId, `Total de chaves encontradas na NF_ENTRADA_XML: ${allEntradaKeys.length}`);
+
+            const existingLocal = await this.prisma.nfeConciliacao.findMany({
+                select: { chave_nfe: true }
+            });
+            const existingLocalSet = new Set(existingLocal.map(i => i.chave_nfe));
+            const keysToImport = allEntradaKeys.filter(k => !existingLocalSet.has(k));
+
+            this.appendJobLog(jobId, `Chaves novas para importar: ${keysToImport.length}`);
+
             let inserted = 0;
             let skipped = 0;
 
             if (jobId) {
                 const job = this.launchedSyncJobs.get(jobId);
                 if (job) {
-                    job.totalEncontradas = launchedInvoices.length;
-                    job.progresso = launchedInvoices.length === 0 ? 100 : 0;
+                    job.totalEncontradas = allEntradaKeys.length;
+                    job.progresso = keysToImport.length === 0 ? 100 : 0;
                     this.launchedSyncJobs.set(jobId, job);
                 }
-                this.appendJobLog(jobId, `Total de notas encontradas na NF_ENTRADA_XML: ${launchedInvoices.length}`);
             }
 
-            for (let index = 0; index < launchedInvoices.length; index++) {
-                const inv = launchedInvoices[index];
-                const chave = String(inv.CHAVE_NFE || '').trim();
-                if (!chave) {
-                    skipped++;
-                    if (jobId) {
-                        const job = this.launchedSyncJobs.get(jobId);
-                        if (job) {
-                            job.processadas = index + 1;
-                            job.ignoradas = skipped;
-                            job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
-                            this.launchedSyncJobs.set(jobId, job);
-                        }
+            const batchSize = 100;
+            let processadas = 0;
+
+            for (let offset = 0; offset < keysToImport.length; offset += batchSize) {
+                const batchKeys = keysToImport.slice(offset, offset + batchSize);
+                this.appendJobLog(jobId, `Carregando lote ${Math.floor(offset / batchSize) + 1} com ${batchKeys.length} chaves...`);
+
+                const batchInvoices = await this.fetchEntradaXmlInvoicesByKeys(batchKeys);
+
+                for (const inv of batchInvoices) {
+                    const chave = String(inv.CHAVE_NFE || '').trim();
+                    if (!chave) {
+                        skipped++;
+                        processadas++;
+                        continue;
                     }
-                    continue;
-                }
 
-                const normalizedXml = await this.normalizeBlobXml(inv.XML_COMPLETO) || await this.normalizeBlobXml(inv.XML_RESUMO);
-                const parsed = this.extractInvoiceMetadataFromXml(normalizedXml, chave);
+                    const normalizedXml = await this.normalizeBlobXml(inv.XML_COMPLETO) || await this.normalizeBlobXml(inv.XML_RESUMO);
+                    const parsed = this.extractInvoiceMetadataFromXml(normalizedXml, chave);
 
-                const exists = await this.prisma.nfeConciliacao.findUnique({
-                    where: { chave_nfe: chave },
-                    select: { chave_nfe: true }
-                });
+                    try {
+                        await this.prisma.nfeConciliacao.create({
+                            data: {
+                                chave_nfe: chave,
+                                emitente: parsed.emitente,
+                                cnpj_emitente: parsed.cnpjEmitente,
+                                data_emissao: parsed.dataEmissao,
+                                valor_total: parsed.valorTotal,
+                                xml_completo: parsed.xmlCompleto,
+                                status_erp: 'LANCADA',
+                                tipo_operacao: parsed.tipoOperacao,
+                                tipo_operacao_desc: parsed.tipoOperacaoDesc,
+                            }
+                        });
+                        inserted++;
+                    } catch {
+                        // Se outra execução inserir no meio do caminho, tratamos como ignorada
+                        skipped++;
+                    }
 
-                if (exists) {
-                    skipped++;
+                    processadas++;
+
                     if (jobId) {
                         const job = this.launchedSyncJobs.get(jobId);
                         if (job) {
-                            job.processadas = index + 1;
+                            job.processadas = processadas;
                             job.inseridas = inserted;
                             job.ignoradas = skipped;
-                            job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
+                            job.progresso = keysToImport.length === 0
+                                ? 100
+                                : Math.round((processadas / keysToImport.length) * 100);
                             this.launchedSyncJobs.set(jobId, job);
                         }
                     }
-                    continue;
                 }
-
-                await this.prisma.nfeConciliacao.create({
-                    data: {
-                        chave_nfe: chave,
-                        emitente: parsed.emitente,
-                        cnpj_emitente: parsed.cnpjEmitente,
-                        data_emissao: parsed.dataEmissao,
-                        valor_total: parsed.valorTotal,
-                        xml_completo: parsed.xmlCompleto,
-                        status_erp: 'LANCADA',
-                        tipo_operacao: parsed.tipoOperacao,
-                        tipo_operacao_desc: parsed.tipoOperacaoDesc,
-                    }
-                });
-
-                inserted++;
 
                 if (jobId) {
-                    const job = this.launchedSyncJobs.get(jobId);
-                    if (job) {
-                        job.processadas = index + 1;
-                        job.inseridas = inserted;
-                        job.ignoradas = skipped;
-                        job.progresso = Math.round(((index + 1) / launchedInvoices.length) * 100);
-                        this.launchedSyncJobs.set(jobId, job);
-                    }
-                }
-
-                if (jobId && ((index + 1) % 50 === 0 || index === launchedInvoices.length - 1)) {
-                    this.appendJobLog(jobId, `Processadas ${index + 1}/${launchedInvoices.length} (inseridas: ${inserted}, ignoradas: ${skipped})`);
+                    this.appendJobLog(jobId, `Lote concluído. Processadas ${processadas}/${keysToImport.length} (inseridas: ${inserted}, ignoradas: ${skipped})`);
                 }
             }
 
@@ -277,7 +277,7 @@ export class IcmsService {
                 const job = this.launchedSyncJobs.get(jobId);
                 if (job) {
                     job.status = 'completed';
-                    job.processadas = launchedInvoices.length;
+                    job.processadas = keysToImport.length;
                     job.inseridas = inserted;
                     job.ignoradas = skipped;
                     job.progresso = 100;
@@ -288,7 +288,7 @@ export class IcmsService {
             }
 
             return {
-                totalEncontradas: launchedInvoices.length,
+                totalEncontradas: allEntradaKeys.length,
                 inseridas: inserted,
                 ignoradas: skipped,
             };
@@ -381,6 +381,49 @@ export class IcmsService {
             this.logger.error('Error fetching NF_ENTRADA_XML invoices', e);
             return [];
         }
+    }
+
+    async fetchEntradaXmlKeys() {
+        const sql = `
+      SELECT
+          X.CHAVE_NFE
+      FROM NF_ENTRADA_XML X
+      WHERE X.EMPRESA = 1
+      ORDER BY X.CHAVE_NFE DESC
+    `;
+
+        const firebirdSql = sql.replace(/'/g, "''");
+        const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+
+        const rows = await this.openQuery.query<any>(tsql, {}, { timeout: 300000, allowZeroRows: true });
+        return rows
+            .map(r => String(r.CHAVE_NFE || '').trim())
+            .filter(Boolean);
+    }
+
+    async fetchEntradaXmlInvoicesByKeys(keys: string[]) {
+        if (!keys.length) return [];
+
+        const inList = keys
+            .map((k) => `'${String(k).replace(/'/g, "''")}'`)
+            .join(',');
+
+        const sql = `
+      SELECT
+          X.EMPRESA,
+          X.CHAVE_NFE,
+          X.XML_RESUMO,
+          X.XML_COMPLETO
+      FROM NF_ENTRADA_XML X
+      WHERE X.EMPRESA = 1
+        AND X.CHAVE_NFE IN (${inList})
+      ORDER BY X.CHAVE_NFE DESC
+    `;
+
+        const firebirdSql = sql.replace(/'/g, "''");
+        const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+
+        return await this.openQuery.query<any>(tsql, {}, { timeout: 300000, allowZeroRows: true });
     }
 
     // --- XML UTILS ---
