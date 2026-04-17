@@ -1126,7 +1126,7 @@ export class IcmsService {
             divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
         }
 
-        if (produtoInterno && possuiIcmsSt) {
+        if (produtoInterno && item.impostoEscolhido === 'ST') {
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
             if (stCodigo !== 'ST0-X') {
                 divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
