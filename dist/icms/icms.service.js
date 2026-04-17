@@ -54,6 +54,7 @@ const xml2js = __importStar(require("xml2js"));
 const zlib = __importStar(require("zlib"));
 const crypto_1 = require("crypto");
 const mva_data_1 = require("./constants/mva-data");
+const monofasico_ncm_1 = require("./constants/monofasico-ncm");
 const node_pdf_nfe_1 = require("@alexssmusica/node-pdf-nfe");
 const archiver_1 = __importDefault(require("archiver"));
 const stream_1 = require("stream");
@@ -63,6 +64,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.prisma = prisma;
         this.logger = new common_1.Logger(IcmsService_1.name);
         this.refData = [];
+        this.monofasicoNcmSet = new Set(monofasico_ncm_1.MONOFASICO_NCM_LIST.map((ncm) => this.cleanDigits(ncm)));
         this.launchedSyncJobs = new Map();
         this.xmlNormalizationJobs = new Map();
         this.parseReferenceData();
@@ -753,14 +755,18 @@ let IcmsService = IcmsService_1 = class IcmsService {
             let vStDestacado = 0;
             let pMvaNota = 0;
             let pIcmsOrigem = 0;
+            let cstNota = '';
+            let icmsTag = '';
             const icmsKeys = Object.keys(imposto.ICMS || {});
             for (const key of icmsKeys) {
                 const vals = imposto.ICMS[key];
+                icmsTag = key;
                 vIcmsProprio = parseFloat(vals.vICMS || 0);
                 vStDestacado = parseFloat(vals.vICMSST || 0);
                 pMvaNota = parseFloat(vals.pMVAST || 0);
                 if (vals.pICMS)
                     pIcmsOrigem = parseFloat(vals.pICMS);
+                cstNota = String(vals.CST || vals.CSOSN || '');
             }
             let taxaOrigem = 0.07;
             if (pIcmsOrigem > 0.00 && pIcmsOrigem <= 7.0) {
@@ -821,6 +827,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 produto: prod.xProd,
                 ncmNota: ncm,
                 cfop: prod.CFOP,
+                cstNota,
+                icmsTag,
+                possuiIcmsSt: vStDestacado > 0 || cstNota.endsWith('10') || cstNota.endsWith('60'),
                 refTabela: itemRef,
                 matchType: effectiveMatchType,
                 mvaNota: pMvaNota,
@@ -837,7 +846,321 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         return results;
     }
+    async previewFiscalConference(dto) {
+        return this.runFiscalConference(dto, false);
+    }
+    async runFiscalConference(dto, persist) {
+        const notas = Array.isArray(dto === null || dto === void 0 ? void 0 : dto.notas) ? dto.notas : [];
+        const result = [];
+        for (const nota of notas) {
+            const chaveNfe = String((nota === null || nota === void 0 ? void 0 : nota.chaveNfe) || '').trim();
+            if (!chaveNfe)
+                continue;
+            const nfe = await this.prisma.nfeConciliacao.findUnique({
+                where: { chave_nfe: chaveNfe },
+                select: { cnpj_emitente: true },
+            });
+            const emitenteCnpj = this.cleanDigits((nfe === null || nfe === void 0 ? void 0 : nfe.cnpj_emitente) || '');
+            const isCompraDentroEstado = this.isWithinMtByChave(chaveNfe);
+            const itensOut = [];
+            const warnings = [];
+            let hasComercializacao = false;
+            let hasUsoConsumo = false;
+            for (const item of Array.isArray(nota === null || nota === void 0 ? void 0 : nota.itens) ? nota.itens : []) {
+                const analyzed = await this.analyzeFiscalItem({
+                    chaveNfe,
+                    emitenteCnpj,
+                    isCompraDentroEstado,
+                    item,
+                });
+                hasComercializacao = hasComercializacao || analyzed.destinacaoMercadoria === 'COMERCIALIZACAO';
+                hasUsoConsumo = hasUsoConsumo || analyzed.destinacaoMercadoria === 'USO_CONSUMO';
+                if (persist) {
+                    try {
+                        await this.saveFiscalConferenceItem(chaveNfe, analyzed);
+                    }
+                    catch (error) {
+                        warnings.push(`Falha ao persistir item ${analyzed.item}: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+                itensOut.push(analyzed);
+            }
+            if (persist) {
+                try {
+                    await this.saveFiscalConferenceSummary(chaveNfe, hasComercializacao, hasUsoConsumo);
+                }
+                catch (error) {
+                    warnings.push(`Falha ao atualizar resumo da nota: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            result.push({
+                chaveNfe,
+                flagsNota: {
+                    compraComercializacao: hasComercializacao,
+                    usoConsumo: hasUsoConsumo,
+                },
+                itens: itensOut,
+                warnings,
+            });
+        }
+        return { notas: result };
+    }
+    async analyzeFiscalItem(input) {
+        const { emitenteCnpj, isCompraDentroEstado, item } = input;
+        const destinacaoMercadoria = item.destinacaoMercadoria;
+        const codProdFornecedorRaw = String(item.codProdFornecedor || '').trim();
+        const codProdFornecedor = codProdFornecedorRaw || String(item.item || '');
+        const normalizedNcm = this.cleanDigits(item.ncmNota || '');
+        const normalizedCstNota = this.cleanDigits(item.cstNota || '');
+        const possuiIcmsSt = Boolean(item.possuiIcmsSt || item.impostoEscolhido === 'ST');
+        const possuiDifal = Boolean(item.possuiDifal || item.impostoEscolhido === 'DIFAL');
+        const divergencias = [];
+        const supplier = emitenteCnpj
+            ? await this.findSupplierByCpfCnpj(emitenteCnpj)
+            : null;
+        if (!supplier) {
+            divergencias.push('Fornecedor da nota não encontrado na Stage_Fornecedores pelo CPF/CNPJ do emitente.');
+        }
+        let vinculo = null;
+        if ((supplier === null || supplier === void 0 ? void 0 : supplier.FOR_CODIGO) && codProdFornecedor) {
+            vinculo = await this.findSupplierProductLink(supplier.FOR_CODIGO, codProdFornecedor);
+            if (!vinculo) {
+                divergencias.push('Produto do fornecedor não vinculado na Stage_Produtos_Fornecedor_NFE para o FOR_CODIGO identificado.');
+            }
+        }
+        const produtoInterno = (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO)
+            ? await this.findInternalProduct(vinculo.PRO_CODIGO)
+            : null;
+        if ((vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) && !produtoInterno) {
+            divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
+        }
+        const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
+        const pisEsperado = isMonofasico ? '04' : 'P01';
+        const cofinsEsperado = isMonofasico ? '04' : 'C01';
+        if (destinacaoMercadoria === 'COMERCIALIZACAO') {
+            if (isCompraDentroEstado && item.impostoEscolhido === 'ST') {
+                const cstEndsWithValid = normalizedCstNota.endsWith('10') || normalizedCstNota.endsWith('60');
+                if (!cstEndsWithValid) {
+                    divergencias.push('Compra interna para comercialização com ST exige CST da nota final 10 ou 60.');
+                }
+            }
+            if (produtoInterno) {
+                const subtipo = String(produtoInterno.SUBTIPO || '').trim();
+                if (subtipo !== '00') {
+                    divergencias.push(`SUBTIPO inválido para comercialização: esperado 00 e encontrado ${subtipo || 'vazio'}.`);
+                }
+                if (possuiIcmsSt) {
+                    const stCodigo = String(produtoInterno.ST_CODIGO || '').trim();
+                    if (stCodigo !== 'ST0-X') {
+                        divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
+                    }
+                }
+                const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
+                const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
+                if (pis !== pisEsperado.toUpperCase()) {
+                    divergencias.push(`PIS_CODIGO inválido: esperado ${pisEsperado} e encontrado ${pis || 'vazio'}.`);
+                }
+                if (cofins !== cofinsEsperado.toUpperCase()) {
+                    divergencias.push(`COFINS_CODIGO inválido: esperado ${cofinsEsperado} e encontrado ${cofins || 'vazio'}.`);
+                }
+            }
+        }
+        if (destinacaoMercadoria === 'USO_CONSUMO' && produtoInterno) {
+            const comercializavel = String(produtoInterno.COMERCIALIZAVEL || '').trim().toUpperCase();
+            const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
+            const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
+            const subtipo = String(produtoInterno.SUBTIPO || '').trim();
+            const subgrp = String(produtoInterno.SUBGRP_CODIGO || '').trim();
+            if (comercializavel !== 'N') {
+                divergencias.push(`COMERCIALIZAVEL inválido para uso e consumo: esperado N e encontrado ${comercializavel || 'vazio'}.`);
+            }
+            if (pis !== 'P99') {
+                divergencias.push(`PIS_CODIGO inválido para uso e consumo: esperado P99 e encontrado ${pis || 'vazio'}.`);
+            }
+            if (cofins !== 'C99') {
+                divergencias.push(`COFINS_CODIGO inválido para uso e consumo: esperado C99 e encontrado ${cofins || 'vazio'}.`);
+            }
+            if (subgrp !== '274') {
+                divergencias.push(`SUBGRP_CODIGO inválido para uso e consumo: esperado 274 e encontrado ${subgrp || 'vazio'}.`);
+            }
+            if (subtipo !== '07') {
+                divergencias.push(`SUBTIPO inválido para uso e consumo: esperado 07 e encontrado ${subtipo || 'vazio'}.`);
+            }
+        }
+        return {
+            item: item.item,
+            codProdFornecedor,
+            impostoEscolhido: item.impostoEscolhido,
+            destinacaoMercadoria,
+            possuiIcmsSt,
+            possuiDifal,
+            ncmNota: item.ncmNota || null,
+            cstNota: item.cstNota || null,
+            fornecedor: supplier
+                ? {
+                    forCodigo: String(supplier.FOR_CODIGO || ''),
+                    forNome: String(supplier.FOR_NOME || ''),
+                }
+                : null,
+            produtoVinculado: vinculo
+                ? {
+                    proCodigo: String(vinculo.PRO_CODIGO || ''),
+                    descFornecedor: String(vinculo.DESC_PROD_FORNECEDOR || ''),
+                }
+                : null,
+            produtoInterno: produtoInterno
+                ? {
+                    proCodigo: String(produtoInterno.PRO_CODIGO || ''),
+                    descricao: String(produtoInterno.PRO_DESCRICAO || ''),
+                    stCodigo: String(produtoInterno.ST_CODIGO || ''),
+                    pisCodigo: String(produtoInterno.PIS_CODIGO || ''),
+                    cofinsCodigo: String(produtoInterno.COFINS_CODIGO || ''),
+                    subtipo: String(produtoInterno.SUBTIPO || ''),
+                    comercializavel: String(produtoInterno.COMERCIALIZAVEL || ''),
+                    subgrpCodigo: String(produtoInterno.SUBGRP_CODIGO || ''),
+                }
+                : null,
+            monofasico: isMonofasico,
+            esperadoPis: pisEsperado,
+            esperadoCofins: cofinsEsperado,
+            divergencias,
+            statusConferencia: divergencias.length > 0 ? 'DIVERGENTE' : 'OK',
+        };
+    }
+    async saveFiscalConferenceItem(chaveNfe, analyzed) {
+        var _a, _b, _c;
+        await this.prisma.$executeRawUnsafe(`
+            INSERT INTO com_nfe_conciliacao_item (
+                chave_nfe,
+                n_item,
+                cod_prod_fornecedor,
+                for_codigo,
+                pro_codigo,
+                destinacao_mercadoria,
+                imposto_escolhido,
+                possui_icms_st,
+                possui_difal,
+                ncm_xml,
+                cst_nota,
+                divergencias_json,
+                status_conferencia,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,NOW(),NOW()
+            )
+            ON CONFLICT (chave_nfe, n_item)
+            DO UPDATE SET
+                cod_prod_fornecedor = EXCLUDED.cod_prod_fornecedor,
+                for_codigo = EXCLUDED.for_codigo,
+                pro_codigo = EXCLUDED.pro_codigo,
+                destinacao_mercadoria = EXCLUDED.destinacao_mercadoria,
+                imposto_escolhido = EXCLUDED.imposto_escolhido,
+                possui_icms_st = EXCLUDED.possui_icms_st,
+                possui_difal = EXCLUDED.possui_difal,
+                ncm_xml = EXCLUDED.ncm_xml,
+                cst_nota = EXCLUDED.cst_nota,
+                divergencias_json = EXCLUDED.divergencias_json,
+                status_conferencia = EXCLUDED.status_conferencia,
+                updated_at = NOW()
+            `, chaveNfe, analyzed.item, analyzed.codProdFornecedor, ((_a = analyzed.fornecedor) === null || _a === void 0 ? void 0 : _a.forCodigo) || null, ((_b = analyzed.produtoInterno) === null || _b === void 0 ? void 0 : _b.proCodigo) || ((_c = analyzed.produtoVinculado) === null || _c === void 0 ? void 0 : _c.proCodigo) || null, analyzed.destinacaoMercadoria, analyzed.impostoEscolhido, Boolean(analyzed.possuiIcmsSt), Boolean(analyzed.possuiDifal), analyzed.ncmNota, analyzed.cstNota, JSON.stringify(analyzed.divergencias || []), analyzed.statusConferencia);
+    }
+    async saveFiscalConferenceSummary(chaveNfe, compraComercializacao, usoConsumo) {
+        await this.prisma.$executeRawUnsafe(`
+            UPDATE com_nfe_conciliacao
+            SET
+                compra_comercializacao = $2,
+                uso_consumo = $3,
+                updated_at = NOW()
+            WHERE chave_nfe = $1
+            `, chaveNfe, compraComercializacao, usoConsumo);
+    }
+    async findSupplierByCpfCnpj(cpfCnpj) {
+        var _a;
+        const normalized = this.cleanDigits(cpfCnpj);
+        if (!normalized)
+            return null;
+        const rows = await this.openQuery.query(`
+            SELECT TOP 1
+                FOR_CODIGO,
+                FOR_NOME,
+                CPF_CNPJ
+            FROM [BI].[dbo].[Stage_Fornecedores]
+            WHERE REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(CPF_CNPJ, ''), '.', ''), '/', ''), '-', ''), ' ', '') = @cpfCnpj
+            ORDER BY FOR_CODIGO
+            `, { cpfCnpj: normalized }, { allowZeroRows: true });
+        return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
+    }
+    async findSupplierProductLink(forCodigo, codProdFornecedor) {
+        var _a;
+        const normalizedCode = String(codProdFornecedor || '').trim();
+        const noLeadingZeros = normalizedCode.replace(/^0+/, '');
+        const rows = await this.openQuery.query(`
+            SELECT TOP 1
+                EMPRESA,
+                FOR_CODIGO,
+                COD_PROD_FORNECEDOR,
+                PRO_CODIGO,
+                DESC_PROD_FORNECEDOR,
+                CST_CSOSN_NOTA,
+                CFOP_NOTA
+            FROM [BI].[dbo].[Stage_Produtos_Fornecedor_NFE]
+            WHERE FOR_CODIGO = @forCodigo
+              AND (
+                  LTRIM(RTRIM(ISNULL(COD_PROD_FORNECEDOR, ''))) = @codProdFornecedor
+                  OR LTRIM(RTRIM(ISNULL(COD_PROD_FORNECEDOR, ''))) = @codProdFornecedorNoZero
+              )
+            ORDER BY EMPRESA, PRO_CODIGO
+            `, {
+            forCodigo,
+            codProdFornecedor: normalizedCode,
+            codProdFornecedorNoZero: noLeadingZeros || normalizedCode,
+        }, { allowZeroRows: true });
+        return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
+    }
+    async findInternalProduct(proCodigo) {
+        var _a;
+        const rows = await this.openQuery.query(`
+            SELECT TOP 1
+                PRO_CODIGO,
+                PRO_DESCRICAO,
+                ST_CODIGO,
+                SUBTIPO,
+                PIS_CODIGO,
+                COFINS_CODIGO,
+                COMERCIALIZAVEL,
+                SUBGRP_CODIGO
+            FROM [BI].[dbo].[Stage_Produtos]
+            WHERE PRO_CODIGO = @proCodigo
+            `, { proCodigo }, { allowZeroRows: true });
+        return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
+    }
+    isMonofasicoNcm(ncm) {
+        const ncmClean = this.cleanDigits(ncm);
+        if (!ncmClean)
+            return false;
+        if (this.monofasicoNcmSet.has(ncmClean))
+            return true;
+        if (ncmClean.length >= 6 && this.monofasicoNcmSet.has(ncmClean.slice(0, 6)))
+            return true;
+        if (ncmClean.length >= 4 && this.monofasicoNcmSet.has(ncmClean.slice(0, 4)))
+            return true;
+        return false;
+    }
+    cleanDigits(value) {
+        return String(value || '').replace(/\D/g, '');
+    }
+    isWithinMtByChave(chaveNfe) {
+        const chave = String(chaveNfe || '').trim();
+        return chave.slice(0, 2) === '51';
+    }
     async savePaymentStatus(dto) {
+        let fiscalConference = null;
+        if (Array.isArray(dto.itens) && dto.itens.length > 0) {
+            fiscalConference = await this.runFiscalConference({
+                notas: [{ chaveNfe: dto.chaveNfe, itens: dto.itens }],
+            }, true);
+        }
         const result = await this.prisma.pagamentoGuia.upsert({
             where: { chave_nfe: dto.chaveNfe },
             create: {
@@ -869,7 +1192,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 descricao: `Guia de pagamento salva para NFe ${dto.chaveNfe} com valor ${dto.valor} e observações: ${dto.observacoes}`,
             }),
         });
-        return result;
+        return Object.assign(Object.assign({}, result), { fiscalConference });
     }
     async getPaymentStatusMap() {
         const agruparTipoImposto = await this.prisma.nfeConciliacao.findMany({ select: { chave_nfe: true, tipo_imposto: true } });

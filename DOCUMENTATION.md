@@ -116,3 +116,76 @@ Ao acessar a raiz (`/`), o servidor retorna um JSON indicando status online:
 *   **Adicionar novas rotas**: Crie novos métodos no `IcmsController` e decore com `@Get`, `@Post`, etc. O Swagger detectará automaticamente.
 *   **Alterar regras de cálculo**: Edite `icms.service.ts`.
 *   **Atualizar dependências**: Execute `npm update`. Teste sempre a geração de PDF após updates, pois libs de PDF podem ser sensíveis.
+
+## Conciliação Fiscal por Item (abril/2026)
+
+Foi adicionada a trilha de conferência fiscal por item da nota com vínculo de cadastro entre fornecedor e produto interno.
+
+### Estrutura de banco (PostgreSQL)
+
+Aplicar manualmente o script:
+
+`sql/2026-04-17_conciliacao_fiscal_item.sql`
+
+Esse script:
+
+* adiciona em `com_nfe_conciliacao` os campos:
+  * `compra_comercializacao`
+  * `uso_consumo`
+* cria a tabela `com_nfe_conciliacao_item` para persistência por item da conferência fiscal.
+
+### Novo endpoint
+
+* `POST /icms/fiscal-conferencia/preview`
+
+Entrada:
+
+```json
+{
+  "notas": [
+    {
+      "chaveNfe": "...",
+      "itens": [
+        {
+          "item": 1,
+          "codProdFornecedor": "123",
+          "impostoEscolhido": "ST",
+          "destinacaoMercadoria": "COMERCIALIZACAO",
+          "ncmNota": "8708...",
+          "cstNota": "060"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Saída:
+
+* flags por nota (`compraComercializacao`, `usoConsumo`)
+* status por item (`OK` ou `DIVERGENTE`)
+* lista de divergências para conferência de cadastro.
+
+### Regras implementadas
+
+1. Vínculo fornecedor/produto:
+   * `CPF_CNPJ` do emitente na `Stage_Fornecedores` para obter `FOR_CODIGO`.
+   * `FOR_CODIGO + COD_PROD_FORNECEDOR` na `Stage_Produtos_Fornecedor_NFE` para obter `PRO_CODIGO`.
+
+2. Comercialização:
+   * quando item marcado com ST: `ST_CODIGO = ST0-X`.
+   * `SUBTIPO = 00`.
+   * NCM monofásico (match completo, raiz 6 ou raiz 4): `PIS_CODIGO=04` e `COFINS_CODIGO=04`.
+   * não monofásico: `PIS_CODIGO=P01` e `COFINS_CODIGO=C01`.
+   * compra interna com ST: CST da nota precisa terminar em `10` ou `60`.
+
+3. Uso e consumo:
+   * `COMERCIALIZAVEL = N`
+   * `PIS_CODIGO = P99`
+   * `COFINS_CODIGO = C99`
+   * `SUBGRP_CODIGO = 274`
+   * `SUBTIPO = 07`
+
+### Observação operacional
+
+O endpoint `POST /icms/payment-status` passou a aceitar a coleção de itens para, além do status da nota, persistir a conferência fiscal por item quando a estrutura SQL já estiver aplicada.

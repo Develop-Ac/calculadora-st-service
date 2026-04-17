@@ -1,6 +1,7 @@
 import { StreamableFile } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
+import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
 export declare class IcmsController {
     private readonly service;
     constructor(service: IcmsService);
@@ -71,10 +72,14 @@ export declare class IcmsController {
         xmls: string[];
     }): Promise<any[]>;
     savePaymentStatus(body: any): Promise<any[] | {
+        fiscalConference: any;
         chave_nfe: string;
         data_pagamento: Date;
         valor: number;
         observacoes: string;
+    }>;
+    previewFiscalConference(body: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
     }>;
     getPaymentStatus(): Promise<Record<string, {
         status: string;

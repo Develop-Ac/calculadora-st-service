@@ -69,6 +69,9 @@ let IcmsController = class IcmsController {
         }
         return this.service.savePaymentStatus(body);
     }
+    async previewFiscalConference(body) {
+        return this.service.previewFiscalConference(body);
+    }
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();
     }
@@ -153,6 +156,13 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "savePaymentStatus", null);
+__decorate([
+    (0, common_1.Post)('fiscal-conferencia/preview'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "previewFiscalConference", null);
 __decorate([
     (0, common_1.Get)('payment-status'),
     __metadata("design:type", Function),

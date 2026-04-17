@@ -2,6 +2,7 @@ import { Body, Controller, Get, NotFoundException, Param, Post, Query, Streamabl
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
+import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
 
 @ApiTags('icms')
 @Controller('icms')
@@ -79,6 +80,11 @@ export class IcmsController {
             return results;
         }
         return this.service.savePaymentStatus(body);
+    }
+
+    @Post('fiscal-conferencia/preview')
+    async previewFiscalConference(@Body() body: FiscalConferenceRequestDto) {
+        return this.service.previewFiscalConference(body);
     }
 
     @Get('payment-status')

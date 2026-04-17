@@ -1,10 +1,12 @@
 import { OpenQueryService } from '../shared/database/openquery/openquery.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { FiscalConferenceRequestDto, FiscalConferenceItemDto } from './dto/fiscal-conference.dto';
 export declare class IcmsService {
     private readonly openQuery;
     private readonly prisma;
     private readonly logger;
     private refData;
+    private readonly monofasicoNcmSet;
     private readonly launchedSyncJobs;
     private readonly xmlNormalizationJobs;
     constructor(openQuery: OpenQueryService, prisma: PrismaService);
@@ -94,13 +96,28 @@ export declare class IcmsService {
     private cleanNcm;
     private findMvaInRef;
     calculateStForInvoice(xmlContent: string, icmsInternoRate?: number): Promise<any[]>;
+    previewFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
+    }>;
+    private runFiscalConference;
+    private analyzeFiscalItem;
+    private saveFiscalConferenceItem;
+    private saveFiscalConferenceSummary;
+    private findSupplierByCpfCnpj;
+    private findSupplierProductLink;
+    private findInternalProduct;
+    private isMonofasicoNcm;
+    private cleanDigits;
+    private isWithinMtByChave;
     savePaymentStatus(dto: {
         chaveNfe: string;
         valor?: number;
         observacoes?: string;
         tipo_imposto?: string;
         usuario?: string;
+        itens?: FiscalConferenceItemDto[];
     }): Promise<{
+        fiscalConference: any;
         chave_nfe: string;
         data_pagamento: Date;
         valor: number;
