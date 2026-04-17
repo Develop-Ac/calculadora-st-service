@@ -938,6 +938,24 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if ((vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) && !produtoInterno) {
             divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
         }
+        if (produtoInterno && possuiIcmsSt) {
+            const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
+            if (stCodigo !== 'ST0-X') {
+                divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
+            }
+            else {
+                conformidades.push('ST_CODIGO correto para item com ICMS ST: ST0-X.');
+            }
+        }
+        if (produtoInterno && item.impostoEscolhido === 'TRIBUTADA') {
+            const stCodigoTributada = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
+            if (stCodigoTributada !== 'IGI') {
+                divergencias.push(`Situação tributária inválida para item Tributado: esperado ST_CODIGO=IGI e encontrado ${stCodigoTributada || 'vazio'}.`);
+            }
+            else {
+                conformidades.push('Situação tributária correta para item Tributado: ST_CODIGO=IGI.');
+            }
+        }
         const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
         const pisEsperado = isMonofasico ? '04' : 'P01';
         const cofinsEsperado = isMonofasico ? '04' : 'C01';
@@ -952,12 +970,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 const subtipo = String(produtoInterno.SUBTIPO || '').trim();
                 if (subtipo !== '00') {
                     divergencias.push(`SUBTIPO inválido para comercialização: esperado 00 e encontrado ${subtipo || 'vazio'}.`);
-                }
-                if (possuiIcmsSt) {
-                    const stCodigo = String(produtoInterno.ST_CODIGO || '').trim();
-                    if (stCodigo !== 'ST0-X') {
-                        divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
-                    }
                 }
                 const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
                 const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
