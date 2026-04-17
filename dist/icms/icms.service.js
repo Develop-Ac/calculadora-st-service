@@ -915,6 +915,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const possuiIcmsSt = Boolean(item.possuiIcmsSt || item.impostoEscolhido === 'ST');
         const possuiDifal = Boolean(item.possuiDifal || item.impostoEscolhido === 'DIFAL');
         const divergencias = [];
+        const conformidades = [];
         const supplier = emitenteCnpj
             ? await this.findSupplierByCpfCnpj(emitenteCnpj)
             : null;
@@ -925,7 +926,10 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if ((supplier === null || supplier === void 0 ? void 0 : supplier.FOR_CODIGO) && codProdFornecedor) {
             vinculo = await this.findSupplierProductLink(supplier.FOR_CODIGO, codProdFornecedor);
             if (!vinculo) {
-                divergencias.push('Produto do fornecedor não vinculado na Stage_Produtos_Fornecedor_NFE para o FOR_CODIGO identificado.');
+                divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
+            }
+            else {
+                conformidades.push('Relacionamento do produto do fornecedor com o código interno localizado no Sistema Celta.');
             }
         }
         const produtoInterno = (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO)
@@ -958,10 +962,16 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
                 const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
                 if (pis !== pisEsperado.toUpperCase()) {
-                    divergencias.push(`PIS_CODIGO inválido: esperado ${pisEsperado} e encontrado ${pis || 'vazio'}.`);
+                    divergencias.push(`Código do Pis inválido: esperado ${pisEsperado} e encontrado ${pis || 'vazio'}.`);
+                }
+                else {
+                    conformidades.push(`Código do Pis correto: ${pisEsperado}.`);
                 }
                 if (cofins !== cofinsEsperado.toUpperCase()) {
-                    divergencias.push(`COFINS_CODIGO inválido: esperado ${cofinsEsperado} e encontrado ${cofins || 'vazio'}.`);
+                    divergencias.push(`Código do Cofins inválido: esperado ${cofinsEsperado} e encontrado ${cofins || 'vazio'}.`);
+                }
+                else {
+                    conformidades.push(`Código do Cofins correto: ${cofinsEsperado}.`);
                 }
             }
         }
@@ -975,10 +985,16 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 divergencias.push(`COMERCIALIZAVEL inválido para uso e consumo: esperado N e encontrado ${comercializavel || 'vazio'}.`);
             }
             if (pis !== 'P99') {
-                divergencias.push(`PIS_CODIGO inválido para uso e consumo: esperado P99 e encontrado ${pis || 'vazio'}.`);
+                divergencias.push(`Código do Pis inválido para uso e consumo: esperado P99 e encontrado ${pis || 'vazio'}.`);
+            }
+            else {
+                conformidades.push('Código do Pis correto para uso e consumo: P99.');
             }
             if (cofins !== 'C99') {
-                divergencias.push(`COFINS_CODIGO inválido para uso e consumo: esperado C99 e encontrado ${cofins || 'vazio'}.`);
+                divergencias.push(`Código do Cofins inválido para uso e consumo: esperado C99 e encontrado ${cofins || 'vazio'}.`);
+            }
+            else {
+                conformidades.push('Código do Cofins correto para uso e consumo: C99.');
             }
             if (subgrp !== '274') {
                 divergencias.push(`SUBGRP_CODIGO inválido para uso e consumo: esperado 274 e encontrado ${subgrp || 'vazio'}.`);
@@ -990,6 +1006,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return {
             item: item.item,
             codProdFornecedor,
+            codigoProduto: String((produtoInterno === null || produtoInterno === void 0 ? void 0 : produtoInterno.PRO_CODIGO) || (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) || ''),
             impostoEscolhido: item.impostoEscolhido,
             destinacaoMercadoria,
             possuiIcmsSt,
@@ -1023,6 +1040,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             monofasico: isMonofasico,
             esperadoPis: pisEsperado,
             esperadoCofins: cofinsEsperado,
+            conformidades,
             divergencias,
             statusConferencia: divergencias.length > 0 ? 'DIVERGENTE' : 'OK',
         };
