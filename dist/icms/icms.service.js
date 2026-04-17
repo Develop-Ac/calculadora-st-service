@@ -101,11 +101,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     const normalizedXmlResumo = await this.normalizeBlobXml(inv.XML_RESUMO);
                     const xmlParaPersistir = normalizedXmlCompleto || normalizedXmlResumo || '';
                     const xmlParaPersistirCompactado = this.encodeXml(xmlParaPersistir);
-                    let valorTotal = 0;
-                    const vNfMatch = xmlParaPersistir.match(/<vNF>([\d\.]+)<\/vNF>/);
-                    if (vNfMatch) {
-                        valorTotal = parseFloat(vNfMatch[1]);
-                    }
+                    const valorTotal = this.extractValorTotalFromXml(xmlParaPersistir);
                     await this.prisma.nfeConciliacao.upsert({
                         where: { chave_nfe: inv.CHAVE_NFE },
                         create: {
@@ -153,17 +149,21 @@ let IcmsService = IcmsService_1 = class IcmsService {
             });
             return await Promise.all(allLocal.map(async (local) => {
                 const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+                const xmlResolved = normalizedXml || local.xml_completo;
+                const valorTotal = Number(local.valor_total || 0) > 0
+                    ? Number(local.valor_total || 0)
+                    : this.extractValorTotalFromXml(xmlResolved);
                 return {
                     CHAVE_NFE: local.chave_nfe,
                     NOME_EMITENTE: local.emitente,
                     CPF_CNPJ_EMITENTE: local.cnpj_emitente,
                     DATA_EMISSAO: local.data_emissao,
-                    VALOR_TOTAL: local.valor_total,
+                    VALOR_TOTAL: valorTotal,
                     STATUS_ERP: local.status_erp,
                     TIPO_OPERACAO: local.tipo_operacao,
                     TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
                     XML_COMPLETO: local.xml_completo,
-                    XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
+                    XML_TIPO: this.detectXmlType(xmlResolved),
                     TIPO_IMPOSTO: local.tipo_imposto
                 };
             }));
@@ -200,18 +200,22 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if (!local)
             return null;
         const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+        const xmlResolved = normalizedXml || local.xml_completo;
+        const valorTotal = Number(local.valor_total || 0) > 0
+            ? Number(local.valor_total || 0)
+            : this.extractValorTotalFromXml(xmlResolved);
         return {
             EMPRESA: 1,
             CHAVE_NFE: local.chave_nfe,
             NOME_EMITENTE: local.emitente,
             CPF_CNPJ_EMITENTE: local.cnpj_emitente,
             DATA_EMISSAO: local.data_emissao,
-            VALOR_TOTAL: local.valor_total,
+            VALOR_TOTAL: valorTotal,
             STATUS_ERP: local.status_erp,
             TIPO_OPERACAO: local.tipo_operacao,
             TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-            XML_COMPLETO: normalizedXml || local.xml_completo,
-            XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
+            XML_COMPLETO: xmlResolved,
+            XML_TIPO: this.detectXmlType(xmlResolved),
             TIPO_IMPOSTO: local.tipo_imposto,
         };
     }
@@ -638,8 +642,33 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const yyyy = d.getFullYear();
         return `${dd}.${mm}.${yyyy}`;
     }
+    parseDecimal(value) {
+        const raw = String(value !== null && value !== void 0 ? value : '').trim();
+        if (!raw)
+            return 0;
+        let normalized = raw;
+        if (normalized.includes(',') && normalized.includes('.')) {
+            normalized = normalized.replace(/\./g, '').replace(',', '.');
+        }
+        else if (normalized.includes(',')) {
+            normalized = normalized.replace(',', '.');
+        }
+        const parsed = Number.parseFloat(normalized);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    extractTagValue(xml, tagName) {
+        var _a;
+        if (!xml)
+            return '';
+        const match = xml.match(new RegExp(`<(?:\\w+:)?${tagName}>([^<]+)<\\/(?:\\w+:)?${tagName}>`, 'i'));
+        return ((_a = match === null || match === void 0 ? void 0 : match[1]) === null || _a === void 0 ? void 0 : _a.trim()) || '';
+    }
+    extractValorTotalFromXml(xml) {
+        const rawVnf = this.extractTagValue(xml, 'vNF');
+        return this.parseDecimal(rawVnf);
+    }
     extractInvoiceMetadataFromXml(xml, fallbackChave) {
-        var _a, _b, _c, _d, _e, _f, _g, _h;
+        var _a, _b, _c, _d, _e, _f, _g;
         const emitente = ((_b = (_a = xml.match(/<xNome>([\s\S]*?)<\/xNome>/)) === null || _a === void 0 ? void 0 : _a[1]) === null || _b === void 0 ? void 0 : _b.trim()) || 'Desconhecido';
         const cnpjEmitente = ((_c = xml.match(/<CNPJ>(\d+)<\/CNPJ>/)) === null || _c === void 0 ? void 0 : _c[1])
             || ((_d = xml.match(/<CPF>(\d+)<\/CPF>/)) === null || _d === void 0 ? void 0 : _d[1])
@@ -648,8 +677,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const dEmi = (_f = xml.match(/<dEmi>([^<]+)<\/dEmi>/)) === null || _f === void 0 ? void 0 : _f[1];
         const dataEmissao = new Date(dhEmi || dEmi || Date.now());
         const safeDataEmissao = Number.isNaN(dataEmissao.getTime()) ? new Date() : dataEmissao;
-        const valorTotal = parseFloat(((_g = xml.match(/<vNF>([\d\.]+)<\/vNF>/)) === null || _g === void 0 ? void 0 : _g[1]) || '0') || 0;
-        const tpNf = parseInt(((_h = xml.match(/<tpNF>(\d)<\/tpNF>/)) === null || _h === void 0 ? void 0 : _h[1]) || '0', 10);
+        const valorTotal = this.extractValorTotalFromXml(xml);
+        const tpNf = parseInt(((_g = xml.match(/<tpNF>(\d)<\/tpNF>/)) === null || _g === void 0 ? void 0 : _g[1]) || '0', 10);
         const tipoOperacao = Number.isNaN(tpNf) ? 0 : tpNf;
         const tipoOperacaoDesc = tipoOperacao === 0 ? 'ENTRADA PRÓPRIA' : 'SAÍDA';
         const finalXml = xml && xml.includes('<') ? xml : `<chave>${fallbackChave}</chave>`;
@@ -721,7 +750,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     emitente: emit.xNome || 'Desconhecido',
                     cnpj_emitente: emit.CNPJ || emit.CPF,
                     data_emissao: new Date(ide.dhEmi || ide.dEmi),
-                    valor_total: parseFloat(total.vNF || 0),
+                    valor_total: this.parseDecimal(total.vNF || 0),
                     xml_completo: compressedXml,
                     status_erp: 'UPLOAD',
                     tipo_operacao: parseInt(ide.tpNF || 0),

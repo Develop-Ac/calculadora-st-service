@@ -91,6 +91,9 @@ export declare class IcmsService {
     private encodeXml;
     private normalizeBlobXml;
     private toFirebirdDateOrNull;
+    private parseDecimal;
+    private extractTagValue;
+    private extractValorTotalFromXml;
     private extractInvoiceMetadataFromXml;
     private isInterstateInvoice;
     private cleanNcm;

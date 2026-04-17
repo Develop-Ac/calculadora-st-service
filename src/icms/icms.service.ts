@@ -96,12 +96,7 @@ export class IcmsService {
                     const normalizedXmlResumo = await this.normalizeBlobXml(inv.XML_RESUMO);
                     const xmlParaPersistir = normalizedXmlCompleto || normalizedXmlResumo || '';
                     const xmlParaPersistirCompactado = this.encodeXml(xmlParaPersistir);
-
-                    let valorTotal = 0;
-                    const vNfMatch = xmlParaPersistir.match(/<vNF>([\d\.]+)<\/vNF>/);
-                    if (vNfMatch) {
-                        valorTotal = parseFloat(vNfMatch[1]);
-                    }
+                    const valorTotal = this.extractValorTotalFromXml(xmlParaPersistir);
 
                     await this.prisma.nfeConciliacao.upsert({
                         where: { chave_nfe: inv.CHAVE_NFE },
@@ -162,18 +157,22 @@ export class IcmsService {
 
             return await Promise.all(allLocal.map(async (local) => {
                 const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+                const xmlResolved = normalizedXml || local.xml_completo;
+                const valorTotal = Number(local.valor_total || 0) > 0
+                    ? Number(local.valor_total || 0)
+                    : this.extractValorTotalFromXml(xmlResolved);
 
                 return {
                     CHAVE_NFE: local.chave_nfe,
                     NOME_EMITENTE: local.emitente,
                     CPF_CNPJ_EMITENTE: local.cnpj_emitente,
                     DATA_EMISSAO: local.data_emissao,
-                    VALOR_TOTAL: local.valor_total,
+                    VALOR_TOTAL: valorTotal,
                     STATUS_ERP: local.status_erp,
                     TIPO_OPERACAO: local.tipo_operacao,
                     TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
                     XML_COMPLETO: local.xml_completo,
-                    XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
+                    XML_TIPO: this.detectXmlType(xmlResolved),
                     TIPO_IMPOSTO: local.tipo_imposto
                 };
             }));
@@ -215,6 +214,10 @@ export class IcmsService {
         if (!local) return null;
 
         const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
+        const xmlResolved = normalizedXml || local.xml_completo;
+        const valorTotal = Number(local.valor_total || 0) > 0
+            ? Number(local.valor_total || 0)
+            : this.extractValorTotalFromXml(xmlResolved);
 
         return {
             EMPRESA: 1,
@@ -222,12 +225,12 @@ export class IcmsService {
             NOME_EMITENTE: local.emitente,
             CPF_CNPJ_EMITENTE: local.cnpj_emitente,
             DATA_EMISSAO: local.data_emissao,
-            VALOR_TOTAL: local.valor_total,
+            VALOR_TOTAL: valorTotal,
             STATUS_ERP: local.status_erp,
             TIPO_OPERACAO: local.tipo_operacao,
             TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
-            XML_COMPLETO: normalizedXml || local.xml_completo,
-            XML_TIPO: this.detectXmlType(normalizedXml || local.xml_completo),
+            XML_COMPLETO: xmlResolved,
+            XML_TIPO: this.detectXmlType(xmlResolved),
             TIPO_IMPOSTO: local.tipo_imposto,
         };
     }
@@ -721,6 +724,32 @@ export class IcmsService {
         return `${dd}.${mm}.${yyyy}`;
     }
 
+    private parseDecimal(value: unknown) {
+        const raw = String(value ?? '').trim();
+        if (!raw) return 0;
+
+        let normalized = raw;
+        if (normalized.includes(',') && normalized.includes('.')) {
+            normalized = normalized.replace(/\./g, '').replace(',', '.');
+        } else if (normalized.includes(',')) {
+            normalized = normalized.replace(',', '.');
+        }
+
+        const parsed = Number.parseFloat(normalized);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private extractTagValue(xml: string, tagName: string) {
+        if (!xml) return '';
+        const match = xml.match(new RegExp(`<(?:\\w+:)?${tagName}>([^<]+)<\\/(?:\\w+:)?${tagName}>`, 'i'));
+        return match?.[1]?.trim() || '';
+    }
+
+    private extractValorTotalFromXml(xml: string) {
+        const rawVnf = this.extractTagValue(xml, 'vNF');
+        return this.parseDecimal(rawVnf);
+    }
+
     private extractInvoiceMetadataFromXml(xml: string, fallbackChave: string) {
         const emitente = xml.match(/<xNome>([\s\S]*?)<\/xNome>/)?.[1]?.trim() || 'Desconhecido';
         const cnpjEmitente = xml.match(/<CNPJ>(\d+)<\/CNPJ>/)?.[1]
@@ -732,7 +761,7 @@ export class IcmsService {
         const dataEmissao = new Date(dhEmi || dEmi || Date.now());
         const safeDataEmissao = Number.isNaN(dataEmissao.getTime()) ? new Date() : dataEmissao;
 
-        const valorTotal = parseFloat(xml.match(/<vNF>([\d\.]+)<\/vNF>/)?.[1] || '0') || 0;
+        const valorTotal = this.extractValorTotalFromXml(xml);
 
         const tpNf = parseInt(xml.match(/<tpNF>(\d)<\/tpNF>/)?.[1] || '0', 10);
         const tipoOperacao = Number.isNaN(tpNf) ? 0 : tpNf;
@@ -827,7 +856,7 @@ export class IcmsService {
                     emitente: emit.xNome || 'Desconhecido',
                     cnpj_emitente: emit.CNPJ || emit.CPF,
                     data_emissao: new Date(ide.dhEmi || ide.dEmi),
-                    valor_total: parseFloat(total.vNF || 0),
+                    valor_total: this.parseDecimal(total.vNF || 0),
                     xml_completo: compressedXml,
                     status_erp: 'UPLOAD', // Mark as upload to distinguish
                     tipo_operacao: parseInt(ide.tpNF || 0),
