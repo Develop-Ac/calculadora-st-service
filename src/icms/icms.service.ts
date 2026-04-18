@@ -795,6 +795,44 @@ export class IcmsService {
 
         const textForFeCte = info32 || compactText;
         const normalizedTextForFeCte = textForFeCte.replace(/\s+/g, ' ');
+        const numeroNfChave = String(chaveNfe || '').substring(25, 34).replace(/^0+/, '');
+
+        const normalizeDigits = (value: string | null | undefined) =>
+            String(value || '').replace(/\D/g, '').replace(/^0+/, '');
+
+        const captureContextAfterMarker = (source: string) => {
+            const marker = source.match(/NFE?\s*OU\s*CTE\s*[:\-]?/i);
+            if (!marker || marker.index == null) return '';
+
+            const start = marker.index + marker[0].length;
+            const tail = source.slice(start);
+            const endBySenhor = tail.search(/Senhor\s+Contribuinte/i);
+            const endByNaoReceber = tail.search(/N[ÃA]O\s+RECEBER/i);
+
+            const candidates = [endBySenhor, endByNaoReceber].filter((idx) => idx >= 0);
+            const end = candidates.length > 0 ? Math.min(...candidates) : Math.min(tail.length, 260);
+            return tail.slice(0, end);
+        };
+
+        const selectBestToken = (tokenList: string[]) => {
+            if (tokenList.length === 0) return null;
+
+            const exactByChave = tokenList.find((token) => normalizeDigits(token) === numeroNfChave);
+            if (exactByChave) return exactByChave;
+
+            const plausible = tokenList.find((token) => {
+                const len = normalizeDigits(token).length;
+                return len >= 6 && len <= 10;
+            });
+            return plausible || tokenList[0];
+        };
+
+        const markerContext = captureContextAfterMarker(compactText) || captureContextAfterMarker(normalizedTextForFeCte);
+        const markerContextTokens = (markerContext.match(/\d[\d\s.-]{4,25}/g) || [])
+            .map((token) => token.replace(/\D/g, ''))
+            .filter((token) => token.length > 0);
+
+        const markerToken = selectBestToken(markerContextTokens);
 
         // Prefer the number that appears right after the explicit "NFE ou CTE:" marker.
         const feCteByMarker = normalizedTextForFeCte.match(/NFE?\s*OU\s*CTE\s*[:\-]?\s*(\d{1,20})\b/i)
@@ -804,13 +842,12 @@ export class IcmsService {
         const feCteFallback = normalizedTextForFeCte.match(/\b(?:NFE?|CTE|FE)\s*[:\-]?\s*(\d{1,20})\b/i)
             || textForFeCte.match(/\b(?:NFE?|CTE|FE)\s*[:\-]?\s*(\d{1,20})\b/i);
 
-        const feCteRaw = feCteByMarker?.[1] || feCteFallback?.[1] || null;
+        const feCteRaw = markerToken || feCteByMarker?.[1] || feCteFallback?.[1] || null;
 
         const dataVencimento = this.parsePtBrDate(dataVencimentoRaw);
         const valor = this.parsePtBrMoney(valorRaw);
 
-        const numeroNfExtraido = feCteRaw ? feCteRaw.replace(/^0+/, '') : null;
-        const numeroNfChave = String(chaveNfe || '').substring(25, 34).replace(/^0+/, '');
+        const numeroNfExtraido = feCteRaw ? normalizeDigits(feCteRaw) : null;
 
         let feCteConfere: boolean | null = null;
         let aviso: string | null = null;
