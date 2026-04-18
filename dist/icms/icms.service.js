@@ -1343,6 +1343,16 @@ let IcmsService = IcmsService_1 = class IcmsService {
             fiscalConference = await this.runFiscalConference({
                 notas: [{ chaveNfe: dto.chaveNfe, itens: dto.itens }],
             }, true);
+            const selectedItems = Array.from(new Set(dto.itens
+                .map((item) => Number(item === null || item === void 0 ? void 0 : item.item))
+                .filter((item) => Number.isFinite(item) && item > 0)));
+            if (selectedItems.length > 0) {
+                await this.prisma.$executeRawUnsafe(`
+                    DELETE FROM com_nfe_conciliacao_item
+                    WHERE chave_nfe = $1
+                      AND NOT (n_item = ANY($2::int[]))
+                    `, dto.chaveNfe, selectedItems);
+            }
         }
         const result = await this.prisma.pagamentoGuia.upsert({
             where: { chave_nfe: dto.chaveNfe },
@@ -1442,12 +1452,42 @@ let IcmsService = IcmsService_1 = class IcmsService {
             return null;
         }
         const guiaData = guia[0] || null;
+        const itensConciliacao = await this.prisma.$queryRawUnsafe(`
+            SELECT
+                n_item,
+                cod_prod_fornecedor,
+                pro_codigo,
+                destinacao_mercadoria,
+                imposto_escolhido,
+                possui_icms_st,
+                possui_difal,
+                ncm_xml,
+                cst_nota,
+                status_conferencia,
+                updated_at
+            FROM com_nfe_conciliacao_item
+            WHERE chave_nfe = $1
+            ORDER BY n_item ASC
+            `, key);
         return {
             chaveNfe: key,
             status: (_a = pagamento === null || pagamento === void 0 ? void 0 : pagamento.observacoes) !== null && _a !== void 0 ? _a : null,
             valor: (_b = pagamento === null || pagamento === void 0 ? void 0 : pagamento.valor) !== null && _b !== void 0 ? _b : null,
             tipo_imposto: (_c = nfe === null || nfe === void 0 ? void 0 : nfe.tipo_imposto) !== null && _c !== void 0 ? _c : null,
             data_pagamento: (_d = pagamento === null || pagamento === void 0 ? void 0 : pagamento.data_pagamento) !== null && _d !== void 0 ? _d : null,
+            itens_conciliacao: itensConciliacao.map((item) => ({
+                n_item: item.n_item,
+                cod_prod_fornecedor: item.cod_prod_fornecedor,
+                pro_codigo: item.pro_codigo,
+                destinacao_mercadoria: item.destinacao_mercadoria,
+                imposto_escolhido: item.imposto_escolhido,
+                possui_icms_st: item.possui_icms_st,
+                possui_difal: item.possui_difal,
+                ncm_xml: item.ncm_xml,
+                cst_nota: item.cst_nota,
+                status_conferencia: item.status_conferencia,
+                updated_at: item.updated_at,
+            })),
             guia_gerada: Boolean(guiaData),
             guia: guiaData
                 ? {

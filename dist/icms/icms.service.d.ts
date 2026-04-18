@@ -149,6 +149,19 @@ export declare class IcmsService {
         valor: number;
         tipo_imposto: string;
         data_pagamento: Date;
+        itens_conciliacao: {
+            n_item: any;
+            cod_prod_fornecedor: any;
+            pro_codigo: any;
+            destinacao_mercadoria: any;
+            imposto_escolhido: any;
+            possui_icms_st: any;
+            possui_difal: any;
+            ncm_xml: any;
+            cst_nota: any;
+            status_conferencia: any;
+            updated_at: any;
+        }[];
         guia_gerada: boolean;
         guia: {
             bucket: any;

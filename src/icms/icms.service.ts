@@ -1588,6 +1588,26 @@ export class IcmsService {
             fiscalConference = await this.runFiscalConference({
                 notas: [{ chaveNfe: dto.chaveNfe, itens: dto.itens }],
             }, true);
+
+            const selectedItems = Array.from(
+                new Set(
+                    dto.itens
+                        .map((item) => Number(item?.item))
+                        .filter((item) => Number.isFinite(item) && item > 0),
+                ),
+            );
+
+            if (selectedItems.length > 0) {
+                await this.prisma.$executeRawUnsafe(
+                    `
+                    DELETE FROM com_nfe_conciliacao_item
+                    WHERE chave_nfe = $1
+                      AND NOT (n_item = ANY($2::int[]))
+                    `,
+                    dto.chaveNfe,
+                    selectedItems,
+                );
+            }
         }
 
         const result = await this.prisma.pagamentoGuia.upsert({
@@ -1707,12 +1727,46 @@ export class IcmsService {
 
         const guiaData = guia[0] || null;
 
+        const itensConciliacao = await this.prisma.$queryRawUnsafe<any[]>(
+            `
+            SELECT
+                n_item,
+                cod_prod_fornecedor,
+                pro_codigo,
+                destinacao_mercadoria,
+                imposto_escolhido,
+                possui_icms_st,
+                possui_difal,
+                ncm_xml,
+                cst_nota,
+                status_conferencia,
+                updated_at
+            FROM com_nfe_conciliacao_item
+            WHERE chave_nfe = $1
+            ORDER BY n_item ASC
+            `,
+            key,
+        );
+
         return {
             chaveNfe: key,
             status: pagamento?.observacoes ?? null,
             valor: pagamento?.valor ?? null,
             tipo_imposto: nfe?.tipo_imposto ?? null,
             data_pagamento: pagamento?.data_pagamento ?? null,
+            itens_conciliacao: itensConciliacao.map((item) => ({
+                n_item: item.n_item,
+                cod_prod_fornecedor: item.cod_prod_fornecedor,
+                pro_codigo: item.pro_codigo,
+                destinacao_mercadoria: item.destinacao_mercadoria,
+                imposto_escolhido: item.imposto_escolhido,
+                possui_icms_st: item.possui_icms_st,
+                possui_difal: item.possui_difal,
+                ncm_xml: item.ncm_xml,
+                cst_nota: item.cst_nota,
+                status_conferencia: item.status_conferencia,
+                updated_at: item.updated_at,
+            })),
             guia_gerada: Boolean(guiaData),
             guia: guiaData
                 ? {
