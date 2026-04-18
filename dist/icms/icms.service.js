@@ -1584,6 +1584,34 @@ let IcmsService = IcmsService_1 = class IcmsService {
             updated_at: guia.updated_at,
         };
     }
+    async downloadGuiaByNfe(chaveNfe) {
+        const guia = await this.getGuiaByNfe(chaveNfe);
+        if (!(guia === null || guia === void 0 ? void 0 : guia.path))
+            return null;
+        const client = this.getMinioClient();
+        const stream = await client.getObject(guia.bucket || this.minioBucket, guia.path);
+        const fileName = guia.original_file_name || `guia-${String(chaveNfe || '').trim()}.pdf`;
+        return { stream, fileName };
+    }
+    async removeGuiaByNfe(chaveNfe) {
+        const key = String(chaveNfe || '').trim();
+        if (!key)
+            return false;
+        const guia = await this.getGuiaByNfe(key);
+        if (!guia)
+            return false;
+        try {
+            if (guia.path) {
+                const client = this.getMinioClient();
+                await client.removeObject(guia.bucket || this.minioBucket, guia.path);
+            }
+        }
+        catch (error) {
+            this.logger.warn(`Falha ao remover objeto da guia no MinIO para NF ${key}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        await this.prisma.$executeRawUnsafe(`DELETE FROM com_nfe_guia_pdf WHERE chave_nfe = $1`, key);
+        return true;
+    }
     async generateDanfe(xml) {
         return new Promise(async (resolve, reject) => {
             try {

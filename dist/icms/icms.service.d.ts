@@ -198,6 +198,11 @@ export declare class IcmsService {
         uploaded_at: any;
         updated_at: any;
     }>;
+    downloadGuiaByNfe(chaveNfe: string): Promise<{
+        stream: import("stream").Readable;
+        fileName: any;
+    }>;
+    removeGuiaByNfe(chaveNfe: string): Promise<boolean>;
     generateDanfe(xml: string): Promise<Buffer>;
     generateDanfeZip(invoices: {
         xml: string;

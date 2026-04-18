@@ -139,6 +139,11 @@ export declare class IcmsController {
         uploaded_at: any;
         updated_at: any;
     }>;
+    downloadGuiaByNfe(chaveNfe: string, res: Response): Promise<StreamableFile>;
+    removeGuiaByNfe(chaveNfe: string): Promise<{
+        success: boolean;
+        chaveNfe: string;
+    }>;
     generateDanfe(body: {
         xml: string;
     }, res: Response): Promise<StreamableFile>;

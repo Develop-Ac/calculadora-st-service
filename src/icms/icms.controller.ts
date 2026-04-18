@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
@@ -126,6 +126,33 @@ export class IcmsController {
             throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
         }
         return guia;
+    }
+
+    @Get('guia/:chaveNfe/download')
+    async downloadGuiaByNfe(
+        @Param('chaveNfe') chaveNfe: string,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const payload = await this.service.downloadGuiaByNfe(chaveNfe);
+        if (!payload) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `attachment; filename="${payload.fileName}"`,
+        });
+
+        return new StreamableFile(payload.stream);
+    }
+
+    @Delete('guia/:chaveNfe')
+    async removeGuiaByNfe(@Param('chaveNfe') chaveNfe: string) {
+        const removed = await this.service.removeGuiaByNfe(chaveNfe);
+        if (!removed) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return { success: true, chaveNfe };
     }
 
     @Post('danfe')

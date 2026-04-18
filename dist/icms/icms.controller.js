@@ -100,6 +100,24 @@ let IcmsController = class IcmsController {
         }
         return guia;
     }
+    async downloadGuiaByNfe(chaveNfe, res) {
+        const payload = await this.service.downloadGuiaByNfe(chaveNfe);
+        if (!payload) {
+            throw new common_1.NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `attachment; filename="${payload.fileName}"`,
+        });
+        return new common_1.StreamableFile(payload.stream);
+    }
+    async removeGuiaByNfe(chaveNfe) {
+        const removed = await this.service.removeGuiaByNfe(chaveNfe);
+        if (!removed) {
+            throw new common_1.NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return { success: true, chaveNfe };
+    }
     async generateDanfe(body, res) {
         const buffer = await this.service.generateDanfe(body.xml);
         res.set({
@@ -210,6 +228,21 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getGuiaByNfe", null);
+__decorate([
+    (0, common_1.Get)('guia/:chaveNfe/download'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __param(1, (0, common_1.Res)({ passthrough: true })),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "downloadGuiaByNfe", null);
+__decorate([
+    (0, common_1.Delete)('guia/:chaveNfe'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "removeGuiaByNfe", null);
 __decorate([
     (0, common_1.Post)('danfe'),
     __param(0, (0, common_1.Body)()),
