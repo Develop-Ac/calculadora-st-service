@@ -793,8 +793,18 @@ export class IcmsService {
         const valorRaw = this.extractLineField(compactText, '31', 'VALOR');
         const info32 = this.extractLineField(compactText, '32', 'INFORMA[ÇC][ÕO]ES\\s*PREVISTAS\\s*EM\\s*INSTRU[ÇC][ÕO]ES');
 
-        const feCteMatch = (info32 || compactText).match(/\b(?:FE|CTE)\s*[:\-]?\s*(\d{1,20})\b/i);
-        const feCteRaw = feCteMatch?.[1] || null;
+        const textForFeCte = info32 || compactText;
+        const normalizedTextForFeCte = textForFeCte.replace(/\s+/g, ' ');
+
+        // Prefer the number that appears right after the explicit "NFE ou CTE:" marker.
+        const feCteByMarker = normalizedTextForFeCte.match(/NFE?\s*OU\s*CTE\s*[:\-]?\s*(\d{1,20})\b/i)
+            || textForFeCte.match(/NFE?\s*OU\s*CTE\s*[:\-]?\s*(\d{1,20})\b/i);
+
+        // Fallbacks for layout variations.
+        const feCteFallback = normalizedTextForFeCte.match(/\b(?:NFE?|CTE|FE)\s*[:\-]?\s*(\d{1,20})\b/i)
+            || textForFeCte.match(/\b(?:NFE?|CTE|FE)\s*[:\-]?\s*(\d{1,20})\b/i);
+
+        const feCteRaw = feCteByMarker?.[1] || feCteFallback?.[1] || null;
 
         const dataVencimento = this.parsePtBrDate(dataVencimentoRaw);
         const valor = this.parsePtBrMoney(valorRaw);
