@@ -16,6 +16,7 @@ exports.IcmsController = void 0;
 const common_1 = require("@nestjs/common");
 const icms_service_1 = require("./icms.service");
 const swagger_1 = require("@nestjs/swagger");
+const platform_express_1 = require("@nestjs/platform-express");
 let IcmsController = class IcmsController {
     constructor(service) {
         this.service = service;
@@ -81,6 +82,23 @@ let IcmsController = class IcmsController {
             throw new common_1.NotFoundException(`Status não encontrado para a NF: ${chaveNfe}`);
         }
         return status;
+    }
+    async uploadGuiaByNfe(chaveNfe, file) {
+        var _a;
+        if (!file) {
+            throw new common_1.BadRequestException('Arquivo PDF da guia não enviado.');
+        }
+        if (!((_a = file.mimetype) === null || _a === void 0 ? void 0 : _a.toLowerCase().includes('pdf'))) {
+            throw new common_1.BadRequestException('Arquivo inválido. Envie um PDF da guia.');
+        }
+        return this.service.uploadGuiaByNfe(chaveNfe, file);
+    }
+    async getGuiaByNfe(chaveNfe) {
+        const guia = await this.service.getGuiaByNfe(chaveNfe);
+        if (!guia) {
+            throw new common_1.NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return guia;
     }
     async generateDanfe(body, res) {
         const buffer = await this.service.generateDanfe(body.xml);
@@ -176,6 +194,22 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getPaymentStatusByKey", null);
+__decorate([
+    (0, common_1.Post)('guia/:chaveNfe/upload'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __param(1, (0, common_1.UploadedFile)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "uploadGuiaByNfe", null);
+__decorate([
+    (0, common_1.Get)('guia/:chaveNfe'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getGuiaByNfe", null);
 __decorate([
     (0, common_1.Post)('danfe'),
     __param(0, (0, common_1.Body)()),

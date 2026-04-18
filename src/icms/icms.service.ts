@@ -11,10 +11,25 @@ import { FiscalConferenceRequestDto, FiscalConferenceItemDto } from './dto/fisca
 import { gerarPDF } from '@alexssmusica/node-pdf-nfe';
 import archiver from 'archiver';
 import { Writable } from 'stream';
+import * as Minio from 'minio';
+
+type GuiaPdfExtractedData = {
+    numeroDocumento: string | null;
+    dataVencimento: Date | null;
+    valor: number | null;
+    feCte: string | null;
+    numeroNfExtraido: string | null;
+    feCteConfere: boolean | null;
+    aviso: string | null;
+    textoExtraido: string;
+};
 
 @Injectable()
 export class IcmsService {
     private readonly logger = new Logger(IcmsService.name);
+    private readonly minioBucket = process.env.MINIO_BUCKET || 'documentos';
+    private readonly minioRegion = process.env.MINIO_REGION || 'us-east-1';
+    private minioClient: Minio.Client | null = null;
     private refData: any[] = [];
     private readonly monofasicoNcmSet = new Set<string>(MONOFASICO_NCM_LIST.map((ncm) => this.cleanDigits(ncm)));
     private readonly launchedSyncJobs = new Map<string, {
@@ -737,6 +752,127 @@ export class IcmsService {
 
         const parsed = Number.parseFloat(normalized);
         return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private parsePtBrMoney(value: string | null | undefined) {
+        const raw = String(value || '').trim();
+        if (!raw) return null;
+
+        let normalized = raw;
+        if (normalized.includes(',') && normalized.includes('.')) {
+            normalized = normalized.replace(/\./g, '').replace(',', '.');
+        } else if (normalized.includes(',')) {
+            normalized = normalized.replace(',', '.');
+        }
+
+        const parsed = Number.parseFloat(normalized);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    private parsePtBrDate(value: string | null | undefined) {
+        const raw = String(value || '').trim();
+        const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (!match) return null;
+
+        const [, dd, mm, yyyy] = match;
+        const date = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    private extractLineField(text: string, fieldNumber: string, fieldNamePattern: string) {
+        const regex = new RegExp(`${fieldNumber}\\s*-\\s*${fieldNamePattern}[\\s:.-]*([^\\n\\r]+)`, 'i');
+        const match = text.match(regex);
+        return match?.[1]?.trim() || null;
+    }
+
+    private extractGuiaDataFromPdfText(text: string, chaveNfe: string): GuiaPdfExtractedData {
+        const compactText = String(text || '').replace(/\r/g, '');
+
+        const numeroDocumento = this.extractLineField(compactText, '23', 'INF\\.?\\s*COMPLEMENTARES');
+        const dataVencimentoRaw = this.extractLineField(compactText, '22', 'DATA\\s*VENCTO\\.?');
+        const valorRaw = this.extractLineField(compactText, '31', 'VALOR');
+        const info32 = this.extractLineField(compactText, '32', 'INFORMA[ÇC][ÕO]ES\\s*PREVISTAS\\s*EM\\s*INSTRU[ÇC][ÕO]ES');
+
+        const feCteMatch = (info32 || compactText).match(/\b(?:FE|CTE)\s*[:\-]?\s*(\d{1,20})\b/i);
+        const feCteRaw = feCteMatch?.[1] || null;
+
+        const dataVencimento = this.parsePtBrDate(dataVencimentoRaw);
+        const valor = this.parsePtBrMoney(valorRaw);
+
+        const numeroNfExtraido = feCteRaw ? feCteRaw.replace(/^0+/, '') : null;
+        const numeroNfChave = String(chaveNfe || '').substring(25, 34).replace(/^0+/, '');
+
+        let feCteConfere: boolean | null = null;
+        let aviso: string | null = null;
+
+        if (numeroNfExtraido) {
+            feCteConfere = numeroNfExtraido === numeroNfChave;
+            if (!feCteConfere) {
+                aviso = `Aviso: FE/CTE (${numeroNfExtraido}) diferente do número da NF (${numeroNfChave}).`;
+            }
+        }
+
+        return {
+            numeroDocumento,
+            dataVencimento,
+            valor,
+            feCte: feCteRaw,
+            numeroNfExtraido,
+            feCteConfere,
+            aviso,
+            textoExtraido: compactText,
+        };
+    }
+
+    private getMinioClient() {
+        if (this.minioClient) return this.minioClient;
+
+        const endPoint = process.env.MINIO_ENDPOINT;
+        const accessKey = process.env.MINIO_ACCESS_KEY;
+        const secretKey = process.env.MINIO_SECRET_KEY;
+
+        if (!endPoint || !accessKey || !secretKey) {
+            throw new Error('Configuração MinIO incompleta: MINIO_ENDPOINT, MINIO_ACCESS_KEY e MINIO_SECRET_KEY são obrigatórios.');
+        }
+
+        const port = Number(process.env.MINIO_PORT || 9000);
+        const useSSL = String(process.env.MINIO_USE_SSL || 'false').toLowerCase() === 'true';
+
+        this.minioClient = new Minio.Client({
+            endPoint,
+            port,
+            useSSL,
+            accessKey,
+            secretKey,
+        });
+
+        return this.minioClient;
+    }
+
+    private async ensureMinioBucket() {
+        const client = this.getMinioClient();
+        const exists = await client.bucketExists(this.minioBucket);
+        if (!exists) {
+            await client.makeBucket(this.minioBucket, this.minioRegion);
+        }
+    }
+
+    private async uploadGuiaPdfToMinio(chaveNfe: string, file: { buffer: Buffer; originalname: string; mimetype: string }) {
+        await this.ensureMinioBucket();
+        const client = this.getMinioClient();
+
+        const safeFileName = String(file.originalname || 'guia.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const objectPath = `notas/${chaveNfe}/${Date.now()}-${safeFileName}`;
+
+        await client.putObject(
+            this.minioBucket,
+            objectPath,
+            file.buffer,
+            file.buffer.length,
+            { 'Content-Type': file.mimetype || 'application/pdf' },
+        );
+
+        return { bucket: this.minioBucket, objectPath };
     }
 
     private extractTagValue(xml: string, tagName: string) {
@@ -1472,13 +1608,16 @@ export class IcmsService {
     async getPaymentStatusMap() {
         const agruparTipoImposto = await this.prisma.nfeConciliacao.findMany({ select: { chave_nfe: true, tipo_imposto: true } });
         const all = await this.prisma.pagamentoGuia.findMany();
+        const guias = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT chave_nfe, bucket_name, object_path, uploaded_at FROM com_nfe_guia_pdf`
+        );
 
         const mapTipoImposto: Record<string, string> = {};
         for (const nfe of agruparTipoImposto) {
             if (nfe.tipo_imposto) mapTipoImposto[nfe.chave_nfe] = nfe.tipo_imposto;
         }
 
-        const map: Record<string, { status: string, valor: number, tipo_imposto?: string }> = {};
+        const map: Record<string, { status: string, valor: number, tipo_imposto?: string, guiaGerada?: boolean, guiaPath?: string }> = {};
         for (const item of all) {
             map[item.chave_nfe] = {
                 status: item.observacoes,
@@ -1486,6 +1625,20 @@ export class IcmsService {
                 tipo_imposto: mapTipoImposto[item.chave_nfe]
             };
         }
+
+        for (const guia of guias) {
+            const chave = String(guia.chave_nfe || '').trim();
+            if (!chave) continue;
+
+            map[chave] = {
+                status: map[chave]?.status || '',
+                valor: map[chave]?.valor || 0,
+                tipo_imposto: map[chave]?.tipo_imposto || mapTipoImposto[chave],
+                guiaGerada: true,
+                guiaPath: `${guia.bucket_name}/${guia.object_path}`,
+            };
+        }
+
         return map;
     }
 
@@ -1502,9 +1655,32 @@ export class IcmsService {
             where: { chave_nfe: key }
         });
 
-        if (!pagamento && !nfe?.tipo_imposto) {
+        const guia = await this.prisma.$queryRawUnsafe<any[]>(
+            `
+            SELECT
+                chave_nfe,
+                bucket_name,
+                object_path,
+                original_file_name,
+                numero_documento,
+                data_vencimento,
+                valor,
+                fe_cte,
+                numero_nf_extraido,
+                fe_cte_confere,
+                aviso,
+                uploaded_at
+            FROM com_nfe_guia_pdf
+            WHERE chave_nfe = $1
+            `,
+            key,
+        );
+
+        if (!pagamento && !nfe?.tipo_imposto && guia.length === 0) {
             return null;
         }
+
+        const guiaData = guia[0] || null;
 
         return {
             chaveNfe: key,
@@ -1512,6 +1688,154 @@ export class IcmsService {
             valor: pagamento?.valor ?? null,
             tipo_imposto: nfe?.tipo_imposto ?? null,
             data_pagamento: pagamento?.data_pagamento ?? null,
+            guia_gerada: Boolean(guiaData),
+            guia: guiaData
+                ? {
+                    bucket: guiaData.bucket_name,
+                    path: guiaData.object_path,
+                    original_file_name: guiaData.original_file_name,
+                    numero_documento: guiaData.numero_documento,
+                    data_vencimento: guiaData.data_vencimento,
+                    valor: guiaData.valor,
+                    fe_cte: guiaData.fe_cte,
+                    numero_nf_extraido: guiaData.numero_nf_extraido,
+                    fe_cte_confere: guiaData.fe_cte_confere,
+                    aviso: guiaData.aviso,
+                    uploaded_at: guiaData.uploaded_at,
+                }
+                : null,
+        };
+    }
+
+    async uploadGuiaByNfe(chaveNfe: string, file: { buffer: Buffer; originalname: string; mimetype: string }) {
+        const key = String(chaveNfe || '').trim();
+        if (!key) {
+            throw new Error('Chave NF-e inválida.');
+        }
+
+        const nfe = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: key },
+            select: { chave_nfe: true },
+        });
+
+        if (!nfe) {
+            throw new Error(`NF não encontrada para vínculo da guia: ${key}`);
+        }
+
+        const pdfParseModule: any = await import('pdf-parse');
+        const pdfParseFn = pdfParseModule?.default || pdfParseModule;
+        const parsed = await pdfParseFn(file.buffer);
+        const extracted = this.extractGuiaDataFromPdfText(parsed.text || '', key);
+
+        const upload = await this.uploadGuiaPdfToMinio(key, file);
+
+        await this.prisma.$executeRawUnsafe(
+            `
+            INSERT INTO com_nfe_guia_pdf (
+                chave_nfe,
+                bucket_name,
+                object_path,
+                original_file_name,
+                numero_documento,
+                data_vencimento,
+                valor,
+                fe_cte,
+                numero_nf_extraido,
+                fe_cte_confere,
+                aviso,
+                updated_at,
+                uploaded_at
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW()
+            )
+            ON CONFLICT (chave_nfe)
+            DO UPDATE SET
+                bucket_name = EXCLUDED.bucket_name,
+                object_path = EXCLUDED.object_path,
+                original_file_name = EXCLUDED.original_file_name,
+                numero_documento = EXCLUDED.numero_documento,
+                data_vencimento = EXCLUDED.data_vencimento,
+                valor = EXCLUDED.valor,
+                fe_cte = EXCLUDED.fe_cte,
+                numero_nf_extraido = EXCLUDED.numero_nf_extraido,
+                fe_cte_confere = EXCLUDED.fe_cte_confere,
+                aviso = EXCLUDED.aviso,
+                updated_at = NOW(),
+                uploaded_at = NOW()
+            `,
+            key,
+            upload.bucket,
+            upload.objectPath,
+            file.originalname,
+            extracted.numeroDocumento,
+            extracted.dataVencimento,
+            extracted.valor,
+            extracted.feCte,
+            extracted.numeroNfExtraido,
+            extracted.feCteConfere,
+            extracted.aviso,
+        );
+
+        return {
+            chaveNfe: key,
+            guia_gerada: true,
+            bucket: upload.bucket,
+            path: upload.objectPath,
+            original_file_name: file.originalname,
+            numero_documento: extracted.numeroDocumento,
+            data_vencimento: extracted.dataVencimento,
+            valor: extracted.valor,
+            fe_cte: extracted.feCte,
+            numero_nf_extraido: extracted.numeroNfExtraido,
+            fe_cte_confere: extracted.feCteConfere,
+            aviso: extracted.aviso,
+        };
+    }
+
+    async getGuiaByNfe(chaveNfe: string) {
+        const key = String(chaveNfe || '').trim();
+        if (!key) return null;
+
+        const rows = await this.prisma.$queryRawUnsafe<any[]>(
+            `
+            SELECT
+                chave_nfe,
+                bucket_name,
+                object_path,
+                original_file_name,
+                numero_documento,
+                data_vencimento,
+                valor,
+                fe_cte,
+                numero_nf_extraido,
+                fe_cte_confere,
+                aviso,
+                uploaded_at,
+                updated_at
+            FROM com_nfe_guia_pdf
+            WHERE chave_nfe = $1
+            `,
+            key,
+        );
+
+        const guia = rows[0];
+        if (!guia) return null;
+
+        return {
+            chaveNfe: guia.chave_nfe,
+            guia_gerada: true,
+            bucket: guia.bucket_name,
+            path: guia.object_path,
+            original_file_name: guia.original_file_name,
+            numero_documento: guia.numero_documento,
+            data_vencimento: guia.data_vencimento,
+            valor: guia.valor,
+            fe_cte: guia.fe_cte,
+            numero_nf_extraido: guia.numero_nf_extraido,
+            fe_cte_confere: guia.fe_cte_confere,
+            aviso: guia.aviso,
+            uploaded_at: guia.uploaded_at,
+            updated_at: guia.updated_at,
         };
     }
 

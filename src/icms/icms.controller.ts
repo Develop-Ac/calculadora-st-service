@@ -1,8 +1,9 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, StreamableFile, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @ApiTags('icms')
 @Controller('icms')
@@ -99,6 +100,32 @@ export class IcmsController {
             throw new NotFoundException(`Status não encontrado para a NF: ${chaveNfe}`);
         }
         return status;
+    }
+
+    @Post('guia/:chaveNfe/upload')
+    @UseInterceptors(FileInterceptor('file'))
+    async uploadGuiaByNfe(
+        @Param('chaveNfe') chaveNfe: string,
+        @UploadedFile() file?: any,
+    ) {
+        if (!file) {
+            throw new BadRequestException('Arquivo PDF da guia não enviado.');
+        }
+
+        if (!file.mimetype?.toLowerCase().includes('pdf')) {
+            throw new BadRequestException('Arquivo inválido. Envie um PDF da guia.');
+        }
+
+        return this.service.uploadGuiaByNfe(chaveNfe, file);
+    }
+
+    @Get('guia/:chaveNfe')
+    async getGuiaByNfe(@Param('chaveNfe') chaveNfe: string) {
+        const guia = await this.service.getGuiaByNfe(chaveNfe);
+        if (!guia) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return guia;
     }
 
     @Post('danfe')

@@ -5,6 +5,9 @@ export declare class IcmsService {
     private readonly openQuery;
     private readonly prisma;
     private readonly logger;
+    private readonly minioBucket;
+    private readonly minioRegion;
+    private minioClient;
     private refData;
     private readonly monofasicoNcmSet;
     private readonly launchedSyncJobs;
@@ -92,6 +95,13 @@ export declare class IcmsService {
     private normalizeBlobXml;
     private toFirebirdDateOrNull;
     private parseDecimal;
+    private parsePtBrMoney;
+    private parsePtBrDate;
+    private extractLineField;
+    private extractGuiaDataFromPdfText;
+    private getMinioClient;
+    private ensureMinioBucket;
+    private uploadGuiaPdfToMinio;
     private extractTagValue;
     private extractValorTotalFromXml;
     private extractInvoiceMetadataFromXml;
@@ -130,6 +140,8 @@ export declare class IcmsService {
         status: string;
         valor: number;
         tipo_imposto?: string;
+        guiaGerada?: boolean;
+        guiaPath?: string;
     }>>;
     getPaymentStatusByKey(chaveNfe: string): Promise<{
         chaveNfe: string;
@@ -137,6 +149,54 @@ export declare class IcmsService {
         valor: number;
         tipo_imposto: string;
         data_pagamento: Date;
+        guia_gerada: boolean;
+        guia: {
+            bucket: any;
+            path: any;
+            original_file_name: any;
+            numero_documento: any;
+            data_vencimento: any;
+            valor: any;
+            fe_cte: any;
+            numero_nf_extraido: any;
+            fe_cte_confere: any;
+            aviso: any;
+            uploaded_at: any;
+        };
+    }>;
+    uploadGuiaByNfe(chaveNfe: string, file: {
+        buffer: Buffer;
+        originalname: string;
+        mimetype: string;
+    }): Promise<{
+        chaveNfe: string;
+        guia_gerada: boolean;
+        bucket: string;
+        path: string;
+        original_file_name: string;
+        numero_documento: string;
+        data_vencimento: Date;
+        valor: number;
+        fe_cte: string;
+        numero_nf_extraido: string;
+        fe_cte_confere: boolean;
+        aviso: string;
+    }>;
+    getGuiaByNfe(chaveNfe: string): Promise<{
+        chaveNfe: any;
+        guia_gerada: boolean;
+        bucket: any;
+        path: any;
+        original_file_name: any;
+        numero_documento: any;
+        data_vencimento: any;
+        valor: any;
+        fe_cte: any;
+        numero_nf_extraido: any;
+        fe_cte_confere: any;
+        aviso: any;
+        uploaded_at: any;
+        updated_at: any;
     }>;
     generateDanfe(xml: string): Promise<Buffer>;
     generateDanfeZip(invoices: {
