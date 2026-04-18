@@ -141,7 +141,7 @@ export declare class IcmsController {
         guia_gerada: boolean;
         bucket: any;
         path: any;
-        original_file_name: any;
+        original_file_name: string;
         numero_documento: any;
         data_vencimento: any;
         valor: any;

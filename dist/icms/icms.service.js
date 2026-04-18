@@ -807,10 +807,32 @@ let IcmsService = IcmsService_1 = class IcmsService {
             await client.makeBucket(this.minioBucket, this.minioRegion);
         }
     }
+    normalizeUploadedFileName(fileName) {
+        const raw = String(fileName || '').trim();
+        if (!raw)
+            return 'guia.pdf';
+        let normalized = raw;
+        if (/[ÃÂ]/.test(normalized)) {
+            try {
+                const repaired = Buffer.from(normalized, 'latin1').toString('utf8');
+                if (repaired && !repaired.includes('�')) {
+                    normalized = repaired;
+                }
+            }
+            catch (_a) {
+            }
+        }
+        normalized = normalized
+            .replace(/[\u0000-\u001F\u007F]/g, '')
+            .replace(/[\\/]+/g, '_')
+            .trim();
+        return normalized || 'guia.pdf';
+    }
     async uploadGuiaPdfToMinio(chaveNfe, file) {
         await this.ensureMinioBucket();
         const client = this.getMinioClient();
-        const safeFileName = String(file.originalname || 'guia.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const normalizedOriginalName = this.normalizeUploadedFileName(file.originalname);
+        const safeFileName = String(normalizedOriginalName || 'guia.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
         const objectPath = `notas/${chaveNfe}/${Date.now()}-${safeFileName}`;
         await client.putObject(this.minioBucket, objectPath, file.buffer, file.buffer.length, { 'Content-Type': file.mimetype || 'application/pdf' });
         return { bucket: this.minioBucket, objectPath };
@@ -1546,6 +1568,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if (!key) {
             throw new Error('Chave NF-e inválida.');
         }
+        const normalizedOriginalName = this.normalizeUploadedFileName(file.originalname);
         const nfe = await this.prisma.nfeConciliacao.findUnique({
             where: { chave_nfe: key },
             select: { chave_nfe: true },
@@ -1568,7 +1591,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             await parser.destroy().catch(() => undefined);
         }
         const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
-        const upload = await this.uploadGuiaPdfToMinio(key, file);
+        const upload = await this.uploadGuiaPdfToMinio(key, Object.assign(Object.assign({}, file), { originalname: normalizedOriginalName }));
         await this.prisma.$executeRawUnsafe(`
             INSERT INTO com_nfe_guia_pdf (
                 chave_nfe,
@@ -1601,13 +1624,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 aviso = EXCLUDED.aviso,
                 updated_at = NOW(),
                 uploaded_at = NOW()
-            `, key, upload.bucket, upload.objectPath, file.originalname, extracted.numeroDocumento, extracted.dataVencimento, extracted.valor, extracted.feCte, extracted.numeroNfExtraido, extracted.feCteConfere, extracted.aviso);
+            `, key, upload.bucket, upload.objectPath, normalizedOriginalName, extracted.numeroDocumento, extracted.dataVencimento, extracted.valor, extracted.feCte, extracted.numeroNfExtraido, extracted.feCteConfere, extracted.aviso);
         return {
             chaveNfe: key,
             guia_gerada: true,
             bucket: upload.bucket,
             path: upload.objectPath,
-            original_file_name: file.originalname,
+            original_file_name: normalizedOriginalName,
             numero_documento: extracted.numeroDocumento,
             data_vencimento: extracted.dataVencimento,
             valor: extracted.valor,
@@ -1647,7 +1670,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             guia_gerada: true,
             bucket: guia.bucket_name,
             path: guia.object_path,
-            original_file_name: guia.original_file_name,
+            original_file_name: this.normalizeUploadedFileName(guia.original_file_name),
             numero_documento: guia.numero_documento,
             data_vencimento: guia.data_vencimento,
             valor: guia.valor,
@@ -1665,7 +1688,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             return null;
         const client = this.getMinioClient();
         const stream = await client.getObject(guia.bucket || this.minioBucket, guia.path);
-        const fileName = guia.original_file_name || `guia-${String(chaveNfe || '').trim()}.pdf`;
+        const fileName = this.normalizeUploadedFileName(guia.original_file_name || `guia-${String(chaveNfe || '').trim()}.pdf`);
         return { stream, fileName };
     }
     async removeGuiaByNfe(chaveNfe) {

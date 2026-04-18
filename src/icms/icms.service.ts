@@ -929,11 +929,38 @@ export class IcmsService {
         }
     }
 
+    private normalizeUploadedFileName(fileName: string | null | undefined) {
+        const raw = String(fileName || '').trim();
+        if (!raw) return 'guia.pdf';
+
+        let normalized = raw;
+
+        // Common mojibake repair (UTF-8 bytes interpreted as Latin-1), e.g. "NÂº".
+        if (/[ÃÂ]/.test(normalized)) {
+            try {
+                const repaired = Buffer.from(normalized, 'latin1').toString('utf8');
+                if (repaired && !repaired.includes('�')) {
+                    normalized = repaired;
+                }
+            } catch {
+                // Keep original when conversion fails.
+            }
+        }
+
+        normalized = normalized
+            .replace(/[\u0000-\u001F\u007F]/g, '')
+            .replace(/[\\/]+/g, '_')
+            .trim();
+
+        return normalized || 'guia.pdf';
+    }
+
     private async uploadGuiaPdfToMinio(chaveNfe: string, file: { buffer: Buffer; originalname: string; mimetype: string }) {
         await this.ensureMinioBucket();
         const client = this.getMinioClient();
 
-        const safeFileName = String(file.originalname || 'guia.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const normalizedOriginalName = this.normalizeUploadedFileName(file.originalname);
+        const safeFileName = String(normalizedOriginalName || 'guia.pdf').replace(/[^a-zA-Z0-9_.-]/g, '_');
         const objectPath = `notas/${chaveNfe}/${Date.now()}-${safeFileName}`;
 
         await client.putObject(
@@ -1839,6 +1866,8 @@ export class IcmsService {
             throw new Error('Chave NF-e inválida.');
         }
 
+        const normalizedOriginalName = this.normalizeUploadedFileName(file.originalname);
+
         const nfe = await this.prisma.nfeConciliacao.findUnique({
             where: { chave_nfe: key },
             select: { chave_nfe: true },
@@ -1865,7 +1894,7 @@ export class IcmsService {
 
         const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
 
-        const upload = await this.uploadGuiaPdfToMinio(key, file);
+        const upload = await this.uploadGuiaPdfToMinio(key, { ...file, originalname: normalizedOriginalName });
 
         await this.prisma.$executeRawUnsafe(
             `
@@ -1904,7 +1933,7 @@ export class IcmsService {
             key,
             upload.bucket,
             upload.objectPath,
-            file.originalname,
+            normalizedOriginalName,
             extracted.numeroDocumento,
             extracted.dataVencimento,
             extracted.valor,
@@ -1919,7 +1948,7 @@ export class IcmsService {
             guia_gerada: true,
             bucket: upload.bucket,
             path: upload.objectPath,
-            original_file_name: file.originalname,
+            original_file_name: normalizedOriginalName,
             numero_documento: extracted.numeroDocumento,
             data_vencimento: extracted.dataVencimento,
             valor: extracted.valor,
@@ -1964,7 +1993,7 @@ export class IcmsService {
             guia_gerada: true,
             bucket: guia.bucket_name,
             path: guia.object_path,
-            original_file_name: guia.original_file_name,
+            original_file_name: this.normalizeUploadedFileName(guia.original_file_name),
             numero_documento: guia.numero_documento,
             data_vencimento: guia.data_vencimento,
             valor: guia.valor,
@@ -1983,7 +2012,7 @@ export class IcmsService {
 
         const client = this.getMinioClient();
         const stream = await client.getObject(guia.bucket || this.minioBucket, guia.path);
-        const fileName = guia.original_file_name || `guia-${String(chaveNfe || '').trim()}.pdf`;
+        const fileName = this.normalizeUploadedFileName(guia.original_file_name || `guia-${String(chaveNfe || '').trim()}.pdf`);
 
         return { stream, fileName };
     }

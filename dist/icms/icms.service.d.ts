@@ -101,6 +101,7 @@ export declare class IcmsService {
     private extractGuiaDataFromPdfText;
     private getMinioClient;
     private ensureMinioBucket;
+    private normalizeUploadedFileName;
     private uploadGuiaPdfToMinio;
     private extractTagValue;
     private extractValorTotalFromXml;
@@ -200,7 +201,7 @@ export declare class IcmsService {
         guia_gerada: boolean;
         bucket: any;
         path: any;
-        original_file_name: any;
+        original_file_name: string;
         numero_documento: any;
         data_vencimento: any;
         valor: any;
@@ -213,7 +214,7 @@ export declare class IcmsService {
     }>;
     downloadGuiaByNfe(chaveNfe: string): Promise<{
         stream: import("stream").Readable;
-        fileName: any;
+        fileName: string;
     }>;
     removeGuiaByNfe(chaveNfe: string): Promise<boolean>;
     generateDanfe(xml: string): Promise<Buffer>;

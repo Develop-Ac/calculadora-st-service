@@ -105,9 +105,15 @@ let IcmsController = class IcmsController {
         if (!payload) {
             throw new common_1.NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
         }
+        const utf8FileName = String(payload.fileName || 'guia.pdf');
+        const asciiFallback = utf8FileName
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9_.-]/g, '_') || 'guia.pdf';
+        const encodedUtf8FileName = encodeURIComponent(utf8FileName);
         res.set({
             'Content-Type': 'application/pdf',
-            'Content-Disposition': `attachment; filename="${payload.fileName}"`,
+            'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodedUtf8FileName}`,
         });
         return new common_1.StreamableFile(payload.stream);
     }
