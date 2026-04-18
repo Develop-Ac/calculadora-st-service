@@ -1723,9 +1723,21 @@ export class IcmsService {
         }
 
         const pdfParseModule: any = await import('pdf-parse');
-        const pdfParseFn = pdfParseModule?.default || pdfParseModule;
-        const parsed = await pdfParseFn(file.buffer);
-        const extracted = this.extractGuiaDataFromPdfText(parsed.text || '', key);
+        const PDFParseClass = pdfParseModule?.PDFParse;
+        if (typeof PDFParseClass !== 'function') {
+            throw new Error('Biblioteca de leitura de PDF incompatível: classe PDFParse não encontrada.');
+        }
+
+        const parser = new PDFParseClass({ data: file.buffer });
+        let parsedText = '';
+        try {
+            const parsed = await parser.getText();
+            parsedText = String(parsed?.text || '');
+        } finally {
+            await parser.destroy().catch(() => undefined);
+        }
+
+        const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
 
         const upload = await this.uploadGuiaPdfToMinio(key, file);
 

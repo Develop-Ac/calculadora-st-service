@@ -1454,9 +1454,20 @@ let IcmsService = IcmsService_1 = class IcmsService {
             throw new Error(`NF não encontrada para vínculo da guia: ${key}`);
         }
         const pdfParseModule = await Promise.resolve().then(() => __importStar(require('pdf-parse')));
-        const pdfParseFn = (pdfParseModule === null || pdfParseModule === void 0 ? void 0 : pdfParseModule.default) || pdfParseModule;
-        const parsed = await pdfParseFn(file.buffer);
-        const extracted = this.extractGuiaDataFromPdfText(parsed.text || '', key);
+        const PDFParseClass = pdfParseModule === null || pdfParseModule === void 0 ? void 0 : pdfParseModule.PDFParse;
+        if (typeof PDFParseClass !== 'function') {
+            throw new Error('Biblioteca de leitura de PDF incompatível: classe PDFParse não encontrada.');
+        }
+        const parser = new PDFParseClass({ data: file.buffer });
+        let parsedText = '';
+        try {
+            const parsed = await parser.getText();
+            parsedText = String((parsed === null || parsed === void 0 ? void 0 : parsed.text) || '');
+        }
+        finally {
+            await parser.destroy().catch(() => undefined);
+        }
+        const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
         const upload = await this.uploadGuiaPdfToMinio(key, file);
         await this.prisma.$executeRawUnsafe(`
             INSERT INTO com_nfe_guia_pdf (
