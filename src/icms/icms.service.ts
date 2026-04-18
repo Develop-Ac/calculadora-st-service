@@ -827,16 +827,41 @@ export class IcmsService {
     private getMinioClient() {
         if (this.minioClient) return this.minioClient;
 
-        const endPoint = process.env.MINIO_ENDPOINT;
+        const rawEndpoint = String(process.env.MINIO_ENDPOINT || '').trim();
         const accessKey = process.env.MINIO_ACCESS_KEY;
         const secretKey = process.env.MINIO_SECRET_KEY;
 
-        if (!endPoint || !accessKey || !secretKey) {
+        if (!rawEndpoint || !accessKey || !secretKey) {
             throw new Error('Configuração MinIO incompleta: MINIO_ENDPOINT, MINIO_ACCESS_KEY e MINIO_SECRET_KEY são obrigatórios.');
         }
 
-        const port = Number(process.env.MINIO_PORT || 9000);
-        const useSSL = String(process.env.MINIO_USE_SSL || 'false').toLowerCase() === 'true';
+        let endPoint = rawEndpoint;
+        let port = Number(process.env.MINIO_PORT || 9000);
+        let useSSL = String(process.env.MINIO_USE_SSL || 'false').toLowerCase() === 'true';
+
+        // Accept both raw host (s3.local) and full URL (https://s3.local:9000/).
+        if (rawEndpoint.includes('://')) {
+            try {
+                const parsed = new URL(rawEndpoint);
+                endPoint = parsed.hostname;
+                if (parsed.port) {
+                    const parsedPort = Number(parsed.port);
+                    if (Number.isFinite(parsedPort) && parsedPort > 0) {
+                        port = parsedPort;
+                    }
+                } else if (!process.env.MINIO_PORT) {
+                    port = parsed.protocol === 'https:' ? 443 : 80;
+                }
+
+                if (!process.env.MINIO_USE_SSL) {
+                    useSSL = parsed.protocol === 'https:';
+                }
+            } catch {
+                throw new Error(`MINIO_ENDPOINT inválido: ${rawEndpoint}`);
+            }
+        } else {
+            endPoint = rawEndpoint.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+        }
 
         this.minioClient = new Minio.Client({
             endPoint,
