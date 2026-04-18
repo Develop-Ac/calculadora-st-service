@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { OpenQueryService } from '../shared/database/openquery/openquery.service';
 import { PrismaService } from '../prisma/prisma.service';
 import * as xml2js from 'xml2js';
@@ -1893,6 +1893,12 @@ export class IcmsService {
         }
 
         const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
+
+        if (extracted.numeroNfExtraido && extracted.feCteConfere === false) {
+            throw new BadRequestException(
+                `A guia não corresponde à NF selecionada. NFE/CTE da guia: ${extracted.numeroNfExtraido}. Número da NF: ${String(key).substring(25, 34).replace(/^0+/, '')}.`,
+            );
+        }
 
         const upload = await this.uploadGuiaPdfToMinio(key, { ...file, originalname: normalizedOriginalName });
 

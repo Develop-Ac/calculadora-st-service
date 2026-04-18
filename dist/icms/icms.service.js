@@ -1591,6 +1591,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
             await parser.destroy().catch(() => undefined);
         }
         const extracted = this.extractGuiaDataFromPdfText(parsedText, key);
+        if (extracted.numeroNfExtraido && extracted.feCteConfere === false) {
+            throw new common_1.BadRequestException(`A guia não corresponde à NF selecionada. NFE/CTE da guia: ${extracted.numeroNfExtraido}. Número da NF: ${String(key).substring(25, 34).replace(/^0+/, '')}.`);
+        }
         const upload = await this.uploadGuiaPdfToMinio(key, Object.assign(Object.assign({}, file), { originalname: normalizedOriginalName }));
         await this.prisma.$executeRawUnsafe(`
             INSERT INTO com_nfe_guia_pdf (
