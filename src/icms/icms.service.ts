@@ -1252,6 +1252,10 @@ export class IcmsService {
         return this.runFiscalConference(dto, false);
     }
 
+    async persistFiscalConference(dto: FiscalConferenceRequestDto) {
+        return this.runFiscalConference(dto, true);
+    }
+
     private async runFiscalConference(dto: FiscalConferenceRequestDto, persist: boolean) {
         const notas = Array.isArray(dto?.notas) ? dto.notas : [];
         const result = [];
@@ -1644,6 +1648,70 @@ export class IcmsService {
         return String(value || '').replace(/\D/g, '');
     }
 
+    private normalizeComparisonText(value: string) {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toLowerCase();
+    }
+
+    private parseDivergenciasJson(raw: unknown): string[] {
+        if (Array.isArray(raw)) return raw.map((item) => String(item || '')).filter(Boolean);
+
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    return parsed.map((item) => String(item || '')).filter(Boolean);
+                }
+            } catch {
+                return raw ? [raw] : [];
+            }
+            return raw ? [raw] : [];
+        }
+
+        return [];
+    }
+
+    private isOnlyNoRelationshipStatus(divergencias: string[]) {
+        if (!divergencias.length) return false;
+
+        return divergencias.every((item) => {
+            const normalized = this.normalizeComparisonText(item);
+            return normalized.includes('nao foi relacionado ao nosso codigo interno')
+                || normalized.includes('nao vinculado na stage_produtos_fornecedor_nfe');
+        });
+    }
+
+    private getConferenceStatusFromRows(rows: Array<{ status_conferencia?: string | null; divergencias_json?: unknown }>) {
+        if (!rows.length) return 'PENDENTE';
+
+        let hasError = false;
+        let hasNoRelationship = false;
+        let hasOk = false;
+
+        for (const row of rows) {
+            const status = String(row?.status_conferencia || '').trim().toUpperCase();
+            if (status === 'OK') {
+                hasOk = true;
+                continue;
+            }
+
+            const divergencias = this.parseDivergenciasJson(row?.divergencias_json);
+            if (this.isOnlyNoRelationshipStatus(divergencias)) {
+                hasNoRelationship = true;
+            } else {
+                hasError = true;
+            }
+        }
+
+        if (hasError) return 'ERRO';
+        if (hasNoRelationship) return 'SEM_RELACIONAMENTO';
+        if (hasOk) return 'OK';
+        return 'PENDENTE';
+    }
+
     private isWithinMtByChave(chaveNfe: string) {
         const chave = String(chaveNfe || '').trim();
         return chave.slice(0, 2) === '51';
@@ -1730,13 +1798,30 @@ export class IcmsService {
         const guias = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT chave_nfe, bucket_name, object_path, uploaded_at FROM com_nfe_guia_pdf`
         );
+        const conferenciaItens = await this.prisma.$queryRawUnsafe<any[]>(
+            `
+            SELECT
+                chave_nfe,
+                n_item,
+                status_conferencia,
+                divergencias_json
+            FROM com_nfe_conciliacao_item
+            `,
+        );
 
         const mapTipoImposto: Record<string, string> = {};
         for (const nfe of agruparTipoImposto) {
             if (nfe.tipo_imposto) mapTipoImposto[nfe.chave_nfe] = nfe.tipo_imposto;
         }
 
-        const map: Record<string, { status: string, valor: number, tipo_imposto?: string, guiaGerada?: boolean, guiaPath?: string }> = {};
+        const map: Record<string, {
+            status: string,
+            valor: number,
+            tipo_imposto?: string,
+            guiaGerada?: boolean,
+            guiaPath?: string,
+            status_conferencia_produtos?: 'OK' | 'ERRO' | 'SEM_RELACIONAMENTO' | 'PENDENTE',
+        }> = {};
         for (const item of all) {
             map[item.chave_nfe] = {
                 status: item.observacoes,
@@ -1755,6 +1840,29 @@ export class IcmsService {
                 tipo_imposto: map[chave]?.tipo_imposto || mapTipoImposto[chave],
                 guiaGerada: true,
                 guiaPath: `${guia.bucket_name}/${guia.object_path}`,
+            };
+        }
+
+        const conferenciaByChave: Record<string, Array<{ status_conferencia?: string | null; divergencias_json?: unknown }>> = {};
+        for (const item of conferenciaItens) {
+            const chave = String(item?.chave_nfe || '').trim();
+            if (!chave) continue;
+            if (!conferenciaByChave[chave]) conferenciaByChave[chave] = [];
+            conferenciaByChave[chave].push({
+                status_conferencia: item?.status_conferencia,
+                divergencias_json: item?.divergencias_json,
+            });
+        }
+
+        for (const [chave, rows] of Object.entries(conferenciaByChave)) {
+            const statusConferencia = this.getConferenceStatusFromRows(rows) as 'OK' | 'ERRO' | 'SEM_RELACIONAMENTO' | 'PENDENTE';
+            map[chave] = {
+                status: map[chave]?.status || '',
+                valor: map[chave]?.valor || 0,
+                tipo_imposto: map[chave]?.tipo_imposto || mapTipoImposto[chave],
+                guiaGerada: map[chave]?.guiaGerada,
+                guiaPath: map[chave]?.guiaPath,
+                status_conferencia_produtos: statusConferencia,
             };
         }
 
@@ -1813,6 +1921,7 @@ export class IcmsService {
                 possui_difal,
                 ncm_xml,
                 cst_nota,
+                divergencias_json,
                 status_conferencia,
                 updated_at
             FROM com_nfe_conciliacao_item
@@ -1828,6 +1937,7 @@ export class IcmsService {
             valor: pagamento?.valor ?? null,
             tipo_imposto: nfe?.tipo_imposto ?? null,
             data_pagamento: pagamento?.data_pagamento ?? null,
+            status_conferencia_produtos: this.getConferenceStatusFromRows(itensConciliacao) as 'OK' | 'ERRO' | 'SEM_RELACIONAMENTO' | 'PENDENTE',
             itens_conciliacao: itensConciliacao.map((item) => ({
                 n_item: item.n_item,
                 cod_prod_fornecedor: item.cod_prod_fornecedor,
@@ -1838,6 +1948,7 @@ export class IcmsService {
                 possui_difal: item.possui_difal,
                 ncm_xml: item.ncm_xml,
                 cst_nota: item.cst_nota,
+                divergencias_json: this.parseDivergenciasJson(item.divergencias_json),
                 status_conferencia: item.status_conferencia,
                 updated_at: item.updated_at,
             })),

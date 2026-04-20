@@ -88,6 +88,11 @@ export class IcmsController {
         return this.service.previewFiscalConference(body);
     }
 
+    @Post('fiscal-conferencia')
+    async persistFiscalConference(@Body() body: FiscalConferenceRequestDto) {
+        return this.service.persistFiscalConference(body);
+    }
+
     @Get('payment-status')
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();

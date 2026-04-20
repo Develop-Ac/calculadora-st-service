@@ -1059,6 +1059,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
     async previewFiscalConference(dto) {
         return this.runFiscalConference(dto, false);
     }
+    async persistFiscalConference(dto) {
+        return this.runFiscalConference(dto, true);
+    }
     async runFiscalConference(dto, persist) {
         const notas = Array.isArray(dto === null || dto === void 0 ? void 0 : dto.notas) ? dto.notas : [];
         const result = [];
@@ -1390,6 +1393,67 @@ let IcmsService = IcmsService_1 = class IcmsService {
     cleanDigits(value) {
         return String(value || '').replace(/\D/g, '');
     }
+    normalizeComparisonText(value) {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toLowerCase();
+    }
+    parseDivergenciasJson(raw) {
+        if (Array.isArray(raw))
+            return raw.map((item) => String(item || '')).filter(Boolean);
+        if (typeof raw === 'string') {
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    return parsed.map((item) => String(item || '')).filter(Boolean);
+                }
+            }
+            catch (_a) {
+                return raw ? [raw] : [];
+            }
+            return raw ? [raw] : [];
+        }
+        return [];
+    }
+    isOnlyNoRelationshipStatus(divergencias) {
+        if (!divergencias.length)
+            return false;
+        return divergencias.every((item) => {
+            const normalized = this.normalizeComparisonText(item);
+            return normalized.includes('nao foi relacionado ao nosso codigo interno')
+                || normalized.includes('nao vinculado na stage_produtos_fornecedor_nfe');
+        });
+    }
+    getConferenceStatusFromRows(rows) {
+        if (!rows.length)
+            return 'PENDENTE';
+        let hasError = false;
+        let hasNoRelationship = false;
+        let hasOk = false;
+        for (const row of rows) {
+            const status = String((row === null || row === void 0 ? void 0 : row.status_conferencia) || '').trim().toUpperCase();
+            if (status === 'OK') {
+                hasOk = true;
+                continue;
+            }
+            const divergencias = this.parseDivergenciasJson(row === null || row === void 0 ? void 0 : row.divergencias_json);
+            if (this.isOnlyNoRelationshipStatus(divergencias)) {
+                hasNoRelationship = true;
+            }
+            else {
+                hasError = true;
+            }
+        }
+        if (hasError)
+            return 'ERRO';
+        if (hasNoRelationship)
+            return 'SEM_RELACIONAMENTO';
+        if (hasOk)
+            return 'OK';
+        return 'PENDENTE';
+    }
     isWithinMtByChave(chaveNfe) {
         const chave = String(chaveNfe || '').trim();
         return chave.slice(0, 2) === '51';
@@ -1445,10 +1509,18 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return Object.assign(Object.assign({}, result), { fiscalConference });
     }
     async getPaymentStatusMap() {
-        var _a, _b, _c;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const agruparTipoImposto = await this.prisma.nfeConciliacao.findMany({ select: { chave_nfe: true, tipo_imposto: true } });
         const all = await this.prisma.pagamentoGuia.findMany();
         const guias = await this.prisma.$queryRawUnsafe(`SELECT chave_nfe, bucket_name, object_path, uploaded_at FROM com_nfe_guia_pdf`);
+        const conferenciaItens = await this.prisma.$queryRawUnsafe(`
+            SELECT
+                chave_nfe,
+                n_item,
+                status_conferencia,
+                divergencias_json
+            FROM com_nfe_conciliacao_item
+            `);
         const mapTipoImposto = {};
         for (const nfe of agruparTipoImposto) {
             if (nfe.tipo_imposto)
@@ -1472,6 +1544,29 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 tipo_imposto: ((_c = map[chave]) === null || _c === void 0 ? void 0 : _c.tipo_imposto) || mapTipoImposto[chave],
                 guiaGerada: true,
                 guiaPath: `${guia.bucket_name}/${guia.object_path}`,
+            };
+        }
+        const conferenciaByChave = {};
+        for (const item of conferenciaItens) {
+            const chave = String((item === null || item === void 0 ? void 0 : item.chave_nfe) || '').trim();
+            if (!chave)
+                continue;
+            if (!conferenciaByChave[chave])
+                conferenciaByChave[chave] = [];
+            conferenciaByChave[chave].push({
+                status_conferencia: item === null || item === void 0 ? void 0 : item.status_conferencia,
+                divergencias_json: item === null || item === void 0 ? void 0 : item.divergencias_json,
+            });
+        }
+        for (const [chave, rows] of Object.entries(conferenciaByChave)) {
+            const statusConferencia = this.getConferenceStatusFromRows(rows);
+            map[chave] = {
+                status: ((_d = map[chave]) === null || _d === void 0 ? void 0 : _d.status) || '',
+                valor: ((_e = map[chave]) === null || _e === void 0 ? void 0 : _e.valor) || 0,
+                tipo_imposto: ((_f = map[chave]) === null || _f === void 0 ? void 0 : _f.tipo_imposto) || mapTipoImposto[chave],
+                guiaGerada: (_g = map[chave]) === null || _g === void 0 ? void 0 : _g.guiaGerada,
+                guiaPath: (_h = map[chave]) === null || _h === void 0 ? void 0 : _h.guiaPath,
+                status_conferencia_produtos: statusConferencia,
             };
         }
         return map;
@@ -1520,6 +1615,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 possui_difal,
                 ncm_xml,
                 cst_nota,
+                divergencias_json,
                 status_conferencia,
                 updated_at
             FROM com_nfe_conciliacao_item
@@ -1532,6 +1628,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             valor: (_b = pagamento === null || pagamento === void 0 ? void 0 : pagamento.valor) !== null && _b !== void 0 ? _b : null,
             tipo_imposto: (_c = nfe === null || nfe === void 0 ? void 0 : nfe.tipo_imposto) !== null && _c !== void 0 ? _c : null,
             data_pagamento: (_d = pagamento === null || pagamento === void 0 ? void 0 : pagamento.data_pagamento) !== null && _d !== void 0 ? _d : null,
+            status_conferencia_produtos: this.getConferenceStatusFromRows(itensConciliacao),
             itens_conciliacao: itensConciliacao.map((item) => ({
                 n_item: item.n_item,
                 cod_prod_fornecedor: item.cod_prod_fornecedor,
@@ -1542,6 +1639,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 possui_difal: item.possui_difal,
                 ncm_xml: item.ncm_xml,
                 cst_nota: item.cst_nota,
+                divergencias_json: this.parseDivergenciasJson(item.divergencias_json),
                 status_conferencia: item.status_conferencia,
                 updated_at: item.updated_at,
             })),

@@ -113,6 +113,9 @@ export declare class IcmsService {
     previewFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
         notas: any[];
     }>;
+    persistFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
+    }>;
     private runFiscalConference;
     private analyzeFiscalItem;
     private saveFiscalConferenceItem;
@@ -122,6 +125,10 @@ export declare class IcmsService {
     private findInternalProduct;
     private isMonofasicoNcm;
     private cleanDigits;
+    private normalizeComparisonText;
+    private parseDivergenciasJson;
+    private isOnlyNoRelationshipStatus;
+    private getConferenceStatusFromRows;
     private isWithinMtByChave;
     savePaymentStatus(dto: {
         chaveNfe: string;
@@ -143,6 +150,7 @@ export declare class IcmsService {
         tipo_imposto?: string;
         guiaGerada?: boolean;
         guiaPath?: string;
+        status_conferencia_produtos?: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
     }>>;
     getPaymentStatusByKey(chaveNfe: string): Promise<{
         chaveNfe: string;
@@ -150,6 +158,7 @@ export declare class IcmsService {
         valor: number;
         tipo_imposto: string;
         data_pagamento: Date;
+        status_conferencia_produtos: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
         itens_conciliacao: {
             n_item: any;
             cod_prod_fornecedor: any;
@@ -160,6 +169,7 @@ export declare class IcmsService {
             possui_difal: any;
             ncm_xml: any;
             cst_nota: any;
+            divergencias_json: string[];
             status_conferencia: any;
             updated_at: any;
         }[];

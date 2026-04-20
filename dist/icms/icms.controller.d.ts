@@ -81,12 +81,16 @@ export declare class IcmsController {
     previewFiscalConference(body: FiscalConferenceRequestDto): Promise<{
         notas: any[];
     }>;
+    persistFiscalConference(body: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
+    }>;
     getPaymentStatus(): Promise<Record<string, {
         status: string;
         valor: number;
         tipo_imposto?: string;
         guiaGerada?: boolean;
         guiaPath?: string;
+        status_conferencia_produtos?: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
     }>>;
     getPaymentStatusByKey(chaveNfe: string): Promise<{
         chaveNfe: string;
@@ -94,6 +98,7 @@ export declare class IcmsController {
         valor: number;
         tipo_imposto: string;
         data_pagamento: Date;
+        status_conferencia_produtos: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
         itens_conciliacao: {
             n_item: any;
             cod_prod_fornecedor: any;
@@ -104,6 +109,7 @@ export declare class IcmsController {
             possui_difal: any;
             ncm_xml: any;
             cst_nota: any;
+            divergencias_json: string[];
             status_conferencia: any;
             updated_at: any;
         }[];
