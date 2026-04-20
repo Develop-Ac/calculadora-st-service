@@ -1035,6 +1035,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 item: parseFloat(item['$'].nItem),
                 codProd: prod.cProd,
                 produto: prod.xProd,
+                unidadeFornecedor: String(prod.uCom || ''),
                 ncmNota: ncm,
                 cfop: prod.CFOP,
                 cstNota,
@@ -1346,6 +1347,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const escapedDesc = normalizedDesc.replace(/'/g, "''");
         const escapedUnit = normalizedUnit.replace(/'/g, "''");
         const usePkCompleteFilter = Boolean(normalizedDesc && normalizedUnit);
+        const useDescriptionFilter = Boolean(normalizedDesc);
         const firebirdSqlByPk = `
             SELECT
                 EMPRESA,
@@ -1383,6 +1385,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                   TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCode}'
                   OR TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCodeNoZero}'
               )
+                            ${useDescriptionFilter ? `AND UPPER(TRIM(COALESCE(DESC_PROD_FORNECEDOR, ''))) = UPPER('${escapedDesc}')` : ''}
         `.replace(/\s+/g, ' ').trim().replace(/'/g, "''");
         const tsqlPk = `
             SELECT TOP 1

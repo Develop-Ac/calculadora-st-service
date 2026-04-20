@@ -1603,6 +1603,7 @@ export class IcmsService {
         const escapedUnit = normalizedUnit.replace(/'/g, "''");
 
         const usePkCompleteFilter = Boolean(normalizedDesc && normalizedUnit);
+        const useDescriptionFilter = Boolean(normalizedDesc);
 
         const firebirdSqlByPk = `
             SELECT
@@ -1642,6 +1643,7 @@ export class IcmsService {
                   TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCode}'
                   OR TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCodeNoZero}'
               )
+                            ${useDescriptionFilter ? `AND UPPER(TRIM(COALESCE(DESC_PROD_FORNECEDOR, ''))) = UPPER('${escapedDesc}')` : ''}
         `.replace(/\s+/g, ' ').trim().replace(/'/g, "''");
 
         const tsqlPk = `
