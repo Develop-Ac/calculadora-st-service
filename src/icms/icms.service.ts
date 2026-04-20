@@ -1225,6 +1225,7 @@ export class IcmsService {
                 item: parseFloat(item['$'].nItem),
                 codProd: prod.cProd,
                 produto: prod.xProd,
+                unidadeFornecedor: String(prod.uCom || ''),
                 ncmNota: ncm,
                 cfop: prod.CFOP,
                 cstNota,
@@ -1349,7 +1350,12 @@ export class IcmsService {
 
         let vinculo: any = null;
         if (supplier?.FOR_CODIGO && codProdFornecedor) {
-            vinculo = await this.findSupplierProductLink(supplier.FOR_CODIGO, codProdFornecedor);
+            vinculo = await this.findSupplierProductLink(
+                supplier.FOR_CODIGO,
+                codProdFornecedor,
+                item.produto,
+                item.unidadeFornecedor,
+            );
             if (!vinculo) {
                 divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
             } else {
@@ -1579,35 +1585,109 @@ export class IcmsService {
         return rows[0] ?? null;
     }
 
-    private async findSupplierProductLink(forCodigo: string, codProdFornecedor: string) {
+    private async findSupplierProductLink(
+        forCodigo: string,
+        codProdFornecedor: string,
+        descProdFornecedor?: string,
+        unidadeFornecedor?: string,
+    ) {
         const normalizedCode = String(codProdFornecedor || '').trim();
         const noLeadingZeros = normalizedCode.replace(/^0+/, '');
+        const normalizedDesc = String(descProdFornecedor || '').trim();
+        const normalizedUnit = String(unidadeFornecedor || '').trim();
 
-        const rows = await this.openQuery.query<any>(
-            `
-            SELECT TOP 1
+        const escapedForCodigo = String(forCodigo || '').replace(/'/g, "''");
+        const escapedCode = normalizedCode.replace(/'/g, "''");
+        const escapedCodeNoZero = (noLeadingZeros || normalizedCode).replace(/'/g, "''");
+        const escapedDesc = normalizedDesc.replace(/'/g, "''");
+        const escapedUnit = normalizedUnit.replace(/'/g, "''");
+
+        const usePkCompleteFilter = Boolean(normalizedDesc && normalizedUnit);
+
+        const firebirdSqlByPk = `
+            SELECT
                 EMPRESA,
                 FOR_CODIGO,
                 COD_PROD_FORNECEDOR,
+                UM_FORNECEDOR,
+                DESC_PROD_FORNECEDOR,
+                PRO_CODIGO,
+                CST_CSOSN_NOTA,
+                CFOP_NOTA
+            FROM PRODUTOS_FORNECEDOR_NFE
+            WHERE EMPRESA = 1
+              AND FOR_CODIGO = '${escapedForCodigo}'
+              AND (
+                  TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCode}'
+                  OR TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCodeNoZero}'
+              )
+              AND TRIM(COALESCE(UM_FORNECEDOR, '')) = '${escapedUnit}'
+              AND TRIM(COALESCE(DESC_PROD_FORNECEDOR, '')) = '${escapedDesc}'
+        `.replace(/\s+/g, ' ').trim().replace(/'/g, "''");
+
+        const firebirdSqlByCode = `
+            SELECT
+                EMPRESA,
+                FOR_CODIGO,
+                COD_PROD_FORNECEDOR,
+                UM_FORNECEDOR,
                 PRO_CODIGO,
                 DESC_PROD_FORNECEDOR,
                 CST_CSOSN_NOTA,
                 CFOP_NOTA
-            FROM [BI].[dbo].[Stage_Produtos_Fornecedor_NFE]
-            WHERE FOR_CODIGO = @forCodigo
+            FROM PRODUTOS_FORNECEDOR_NFE
+            WHERE EMPRESA = 1
+              AND FOR_CODIGO = '${escapedForCodigo}'
               AND (
-                  LTRIM(RTRIM(ISNULL(COD_PROD_FORNECEDOR, ''))) = @codProdFornecedor
-                  OR LTRIM(RTRIM(ISNULL(COD_PROD_FORNECEDOR, ''))) = @codProdFornecedorNoZero
+                  TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCode}'
+                  OR TRIM(COALESCE(COD_PROD_FORNECEDOR, '')) = '${escapedCodeNoZero}'
               )
+        `.replace(/\s+/g, ' ').trim().replace(/'/g, "''");
+
+        const tsqlPk = `
+            SELECT TOP 1
+                EMPRESA,
+                FOR_CODIGO,
+                COD_PROD_FORNECEDOR,
+                UM_FORNECEDOR,
+                PRO_CODIGO,
+                DESC_PROD_FORNECEDOR,
+                CST_CSOSN_NOTA,
+                CFOP_NOTA
+            FROM OPENQUERY(CONSULTA, '${firebirdSqlByPk}')
             ORDER BY EMPRESA, PRO_CODIGO
-            `,
-            {
-                forCodigo,
-                codProdFornecedor: normalizedCode,
-                codProdFornecedorNoZero: noLeadingZeros || normalizedCode,
-            },
-            { allowZeroRows: true },
-        );
+        `;
+
+        const tsqlCode = `
+            SELECT TOP 1
+                EMPRESA,
+                FOR_CODIGO,
+                COD_PROD_FORNECEDOR,
+                UM_FORNECEDOR,
+                PRO_CODIGO,
+                DESC_PROD_FORNECEDOR,
+                CST_CSOSN_NOTA,
+                CFOP_NOTA
+            FROM OPENQUERY(CONSULTA, '${firebirdSqlByCode}')
+            ORDER BY EMPRESA, PRO_CODIGO
+        `;
+
+        let rows: any[] = [];
+        if (usePkCompleteFilter) {
+            rows = await this.openQuery.query<any>(
+                tsqlPk,
+                {},
+                { allowZeroRows: true },
+            );
+        }
+
+        if (!rows.length) {
+            rows = await this.openQuery.query<any>(
+                tsqlCode,
+                {},
+                { allowZeroRows: true },
+            );
+        }
 
         return rows[0] ?? null;
     }

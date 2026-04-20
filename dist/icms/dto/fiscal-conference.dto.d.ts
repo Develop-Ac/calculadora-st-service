@@ -4,6 +4,7 @@ export interface FiscalConferenceItemDto {
     item: number;
     codProdFornecedor: string;
     produto?: string;
+    unidadeFornecedor?: string;
     ncmNota?: string;
     cfop?: string;
     cstNota?: string;
