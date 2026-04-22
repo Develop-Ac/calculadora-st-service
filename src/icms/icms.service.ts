@@ -1383,10 +1383,10 @@ export class IcmsService {
         if (produtoInterno && item.impostoEscolhido === 'TRIBUTADA') {
             const stCodigoTributada = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
 
-            if (stCodigoTributada !== 'IGI') {
-                divergencias.push(`Situação tributária inválida para item Tributado: esperado ST_CODIGO=IGI e encontrado ${stCodigoTributada || 'vazio'}.`);
+            if (stCodigoTributada !== 'TR0-X') {
+                divergencias.push(`Situação tributária inválida para item Tributado: esperado ST_CODIGO=TR0-X e encontrado ${stCodigoTributada || 'vazio'}.`);
             } else {
-                conformidades.push('Situação tributária correta para item Tributado: ST_CODIGO=IGI.');
+                conformidades.push('Situação tributária correta para item Tributado: ST_CODIGO=TR0-X.');
             }
         }
 
