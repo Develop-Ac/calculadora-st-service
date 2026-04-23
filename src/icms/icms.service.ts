@@ -1348,27 +1348,40 @@ export class IcmsService {
             divergencias.push('Fornecedor da nota não encontrado na Stage_Fornecedores pelo CPF/CNPJ do emitente.');
         }
 
+        const codigoInternoManual = String(item.codigoInternoManual || '').trim();
         let vinculo: any = null;
-        if (supplier?.FOR_CODIGO && codProdFornecedor) {
-            vinculo = await this.findSupplierProductLink(
-                supplier.FOR_CODIGO,
-                codProdFornecedor,
-                item.produto,
-                item.unidadeFornecedor,
-            );
-            if (!vinculo) {
-                divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
+        let produtoInterno: any = null;
+
+        if (codigoInternoManual) {
+            // Relacionamento manual: ignora busca de vínculo e usa o código interno diretamente
+            produtoInterno = await this.findInternalProduct(codigoInternoManual);
+            if (produtoInterno) {
+                conformidades.push(`Relacionamento manual com código interno ${codigoInternoManual} localizado na Stage_Produtos.`);
             } else {
-                conformidades.push('Relacionamento do produto do fornecedor com o código interno localizado no Sistema Celta.');
+                divergencias.push(`Código interno ${codigoInternoManual} informado manualmente não foi encontrado na Stage_Produtos.`);
             }
-        }
+        } else {
+            if (supplier?.FOR_CODIGO && codProdFornecedor) {
+                vinculo = await this.findSupplierProductLink(
+                    supplier.FOR_CODIGO,
+                    codProdFornecedor,
+                    item.produto,
+                    item.unidadeFornecedor,
+                );
+                if (!vinculo) {
+                    divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
+                } else {
+                    conformidades.push('Relacionamento do produto do fornecedor com o código interno localizado no Sistema Celta.');
+                }
+            }
 
-        const produtoInterno = vinculo?.PRO_CODIGO
-            ? await this.findInternalProduct(vinculo.PRO_CODIGO)
-            : null;
+            produtoInterno = vinculo?.PRO_CODIGO
+                ? await this.findInternalProduct(vinculo.PRO_CODIGO)
+                : null;
 
-        if (vinculo?.PRO_CODIGO && !produtoInterno) {
-            divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
+            if (vinculo?.PRO_CODIGO && !produtoInterno) {
+                divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
+            }
         }
 
         if (produtoInterno && item.impostoEscolhido === 'ST') {
@@ -1455,7 +1468,8 @@ export class IcmsService {
         return {
             item: item.item,
             codProdFornecedor,
-            codigoProduto: String(produtoInterno?.PRO_CODIGO || vinculo?.PRO_CODIGO || ''),
+            codigoProduto: String(produtoInterno?.PRO_CODIGO || vinculo?.PRO_CODIGO || codigoInternoManual || ''),
+            codigoInternoManual: codigoInternoManual || null,
             impostoEscolhido: item.impostoEscolhido,
             destinacaoMercadoria,
             possuiIcmsSt,

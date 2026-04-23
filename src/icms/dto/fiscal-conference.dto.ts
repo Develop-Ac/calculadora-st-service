@@ -13,6 +13,8 @@ export interface FiscalConferenceItemDto {
   destinacaoMercadoria: DestinacaoMercadoria;
   possuiIcmsSt?: boolean;
   possuiDifal?: boolean;
+  /** Código interno do produto informado manualmente pelo usuário. Quando presente, ignora a busca por vínculo no Sistema Celta e usa este código diretamente. */
+  codigoInternoManual?: string;
 }
 
 export interface FiscalConferenceInvoiceDto {
