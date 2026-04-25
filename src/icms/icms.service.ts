@@ -1188,7 +1188,15 @@ export class IcmsService {
 
             diffSt = vStCalculado - vStDestacado;
 
-            if (!isDefaultMva) {
+            // CFOP tributado: zera cálculo quando operação não está na lista de tributados
+            const cfopItem = String(prod.CFOP || '').trim();
+            const semTributacaoItem = cfopItem !== '' && !CFOP_INTERESTADUAIS_TRIBUTADOS.has(cfopItem);
+
+            if (semTributacaoItem) {
+                vStCalculado = 0;
+                diffSt = 0;
+                status = "Sem Tributação";
+            } else if (!isDefaultMva) {
                 if (diffSt > 0.05) status = "Guia Complementar";
                 else if (diffSt < -0.05) status = "Pago a Maior";
                 else status = "OK";
@@ -1232,6 +1240,7 @@ export class IcmsService {
                 cstNota,
                 icmsTag,
                 possuiIcmsSt: vStDestacado > 0 || cstNota.endsWith('10') || cstNota.endsWith('60'),
+                semTributacao: semTributacaoItem,
                 refTabela: itemRef,
                 matchType: effectiveMatchType,
                 mvaNota: pMvaNota,
