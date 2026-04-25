@@ -12,6 +12,7 @@ export const CFOP_INTERESTADUAIS_TRIBUTADOS = new Set([
     '6121',
     '6401',
     '6403',
+    '6404',
     '6405',
     '6910',
 ]);
