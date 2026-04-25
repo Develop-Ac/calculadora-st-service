@@ -6,6 +6,7 @@ import * as zlib from 'zlib'; // for gzip
 import { randomUUID } from 'crypto';
 import { CSV_DATA_CLEAN } from './constants/mva-data';
 import { MONOFASICO_NCM_LIST } from './constants/monofasico-ncm';
+import { CFOP_INTERESTADUAIS_TRIBUTADOS } from './constants/cfop-tributados';
 import { FiscalConferenceRequestDto, FiscalConferenceItemDto } from './dto/fiscal-conference.dto';
 // @ts-ignore
 import { gerarPDF } from '@alexssmusica/node-pdf-nfe';
@@ -1277,6 +1278,7 @@ export class IcmsService {
             const warnings: string[] = [];
             let hasComercializacao = false;
             let hasUsoConsumo = false;
+            let hasSemTributacao = false;
 
             for (const item of Array.isArray(nota?.itens) ? nota.itens : []) {
                 const analyzed = await this.analyzeFiscalItem({
@@ -1288,6 +1290,7 @@ export class IcmsService {
 
                 hasComercializacao = hasComercializacao || analyzed.destinacaoMercadoria === 'COMERCIALIZACAO';
                 hasUsoConsumo = hasUsoConsumo || analyzed.destinacaoMercadoria === 'USO_CONSUMO';
+                hasSemTributacao = hasSemTributacao || Boolean(analyzed.semTributacao);
 
                 if (persist) {
                     try {
@@ -1313,6 +1316,7 @@ export class IcmsService {
                 flagsNota: {
                     compraComercializacao: hasComercializacao,
                     usoConsumo: hasUsoConsumo,
+                    semTributacao: hasSemTributacao,
                 },
                 itens: itensOut,
                 warnings,
@@ -1336,6 +1340,9 @@ export class IcmsService {
         const normalizedCstNota = this.cleanDigits(item.cstNota || '');
         const possuiIcmsSt = Boolean(item.possuiIcmsSt || item.impostoEscolhido === 'ST');
         const possuiDifal = Boolean(item.possuiDifal || item.impostoEscolhido === 'DIFAL');
+
+        const cfopNota = String(item.cfop || '').trim();
+        const semTributacao = cfopNota !== '' && !CFOP_INTERESTADUAIS_TRIBUTADOS.has(cfopNota);
 
         const divergencias: string[] = [];
         const conformidades: string[] = [];
@@ -1474,6 +1481,7 @@ export class IcmsService {
             destinacaoMercadoria,
             possuiIcmsSt,
             possuiDifal,
+            semTributacao,
             ncmNota: item.ncmNota || null,
             cstNota: item.cstNota || null,
             fornecedor: supplier
@@ -1522,6 +1530,7 @@ export class IcmsService {
                 imposto_escolhido,
                 possui_icms_st,
                 possui_difal,
+                sem_tributacao,
                 ncm_xml,
                 cst_nota,
                 divergencias_json,
@@ -1529,7 +1538,7 @@ export class IcmsService {
                 created_at,
                 updated_at
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,NOW(),NOW()
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,NOW(),NOW()
             )
             ON CONFLICT (chave_nfe, n_item)
             DO UPDATE SET
@@ -1540,6 +1549,7 @@ export class IcmsService {
                 imposto_escolhido = EXCLUDED.imposto_escolhido,
                 possui_icms_st = EXCLUDED.possui_icms_st,
                 possui_difal = EXCLUDED.possui_difal,
+                sem_tributacao = EXCLUDED.sem_tributacao,
                 ncm_xml = EXCLUDED.ncm_xml,
                 cst_nota = EXCLUDED.cst_nota,
                 divergencias_json = EXCLUDED.divergencias_json,
@@ -1555,6 +1565,7 @@ export class IcmsService {
             analyzed.impostoEscolhido,
             Boolean(analyzed.possuiIcmsSt),
             Boolean(analyzed.possuiDifal),
+            Boolean(analyzed.semTributacao),
             analyzed.ncmNota,
             analyzed.cstNota,
             JSON.stringify(analyzed.divergencias || []),
