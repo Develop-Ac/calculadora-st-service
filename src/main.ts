@@ -19,6 +19,30 @@ async function bootstrap() {
         }),
     );
 
+    app.use(['/docs', '/docs-json'], (req, res, next) => {
+        const authHeader = req.headers.authorization;
+
+        const user = 'admin';
+        const password = 'Ac@2025acesso';
+
+        if (!authHeader || !authHeader.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Swagger"');
+        return res.status(401).send('Autenticação necessária');
+        }
+
+        const base64Credentials = authHeader.split(' ')[1];
+        const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
+
+        const [inputUser, inputPassword] = credentials.split(':');
+
+        if (inputUser !== user || inputPassword !== password) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Swagger"');
+        return res.status(401).send('Usuário ou senha inválidos');
+        }
+
+        next();
+    });
+
     app.use(bodyParser.json({ limit: '50mb' }));
     app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
