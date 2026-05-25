@@ -1,10 +1,17 @@
 import { OpenQueryService } from '../shared/database/openquery/openquery.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { FiscalConferenceRequestDto, FiscalConferenceItemDto } from './dto/fiscal-conference.dto';
 export declare class IcmsService {
     private readonly openQuery;
     private readonly prisma;
     private readonly logger;
+    private readonly minioBucket;
+    private readonly minioRegion;
+    private minioClient;
     private refData;
+    private readonly monofasicoNcmSet;
+    private readonly launchedSyncJobs;
+    private readonly xmlNormalizationJobs;
     constructor(openQuery: OpenQueryService, prisma: PrismaService);
     private parseReferenceData;
     syncInvoices(start?: string, end?: string): Promise<{
@@ -17,20 +24,121 @@ export declare class IcmsService {
         TIPO_OPERACAO: number;
         TIPO_OPERACAO_DESC: string;
         XML_COMPLETO: string;
+        XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
         TIPO_IMPOSTO: string;
     }[]>;
+    private getDateRangeOrDefault;
+    syncLaunchedInvoicesFromEntradaXml(): Promise<{
+        totalEncontradas: number;
+        inseridas: number;
+        ignoradas: number;
+    }>;
+    getInvoiceByKey(chaveNfe: string): Promise<{
+        EMPRESA: number;
+        CHAVE_NFE: string;
+        NOME_EMITENTE: string;
+        CPF_CNPJ_EMITENTE: string;
+        DATA_EMISSAO: Date;
+        VALOR_TOTAL: number;
+        STATUS_ERP: string;
+        TIPO_OPERACAO: number;
+        TIPO_OPERACAO_DESC: string;
+        XML_COMPLETO: string;
+        XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
+        TIPO_IMPOSTO: string;
+    }>;
+    private detectXmlType;
+    startLaunchedInvoicesSyncJob(): Promise<{
+        jobId: `${string}-${string}-${string}-${string}-${string}`;
+    }>;
+    getLaunchedInvoicesSyncJob(jobId: string): {
+        jobId: string;
+        status: "running" | "completed" | "failed";
+        totalEncontradas: number;
+        processadas: number;
+        inseridas: number;
+        ignoradas: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    };
+    startXmlNormalizationJob(batchSize?: number): Promise<{
+        jobId: `${string}-${string}-${string}-${string}-${string}`;
+        batchSize: number;
+    }>;
+    getXmlNormalizationJob(jobId: string): {
+        jobId: string;
+        status: "running" | "completed" | "failed";
+        total: number;
+        processadas: number;
+        normalizadas: number;
+        ignoradas: number;
+        erros: number;
+        progresso: number;
+        logs: string[];
+        startedAt: string;
+        completedAt?: string;
+        errorMessage?: string;
+    };
+    private appendXmlNormalizationLog;
+    private runXmlNormalization;
+    private appendJobLog;
+    private runLaunchedInvoicesSync;
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
+    fetchEntradaXmlInvoices(): Promise<any[]>;
+    fetchEntradaXmlKeys(): Promise<string[]>;
+    fetchEntradaXmlInvoicesByKeys(keys: string[]): Promise<any[]>;
     private decodeXml;
+    private encodeXml;
+    private normalizeBlobXml;
+    private toFirebirdDateOrNull;
+    private parseDecimal;
+    private parsePtBrMoney;
+    private parsePtBrDate;
+    private extractLineField;
+    private extractGuiaDataFromPdfText;
+    private getMinioClient;
+    private ensureMinioBucket;
+    private normalizeUploadedFileName;
+    private uploadGuiaPdfToMinio;
+    private extractTagValue;
+    private extractValorTotalFromXml;
+    private extractInvoiceMetadataFromXml;
     private isInterstateInvoice;
     private cleanNcm;
     private findMvaInRef;
     calculateStForInvoice(xmlContent: string, icmsInternoRate?: number): Promise<any[]>;
+    previewFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
+    }>;
+    persistFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
+        notas: any[];
+    }>;
+    private runFiscalConference;
+    private analyzeFiscalItem;
+    private saveFiscalConferenceItem;
+    private saveFiscalConferenceSummary;
+    private findSupplierByCpfCnpj;
+    private findSupplierProductLink;
+    private findInternalProduct;
+    private isMonofasicoNcm;
+    private cleanDigits;
+    private normalizeComparisonText;
+    private parseDivergenciasJson;
+    private isOnlyNoRelationshipStatus;
+    private getConferenceStatusFromRows;
+    private isWithinMtByChave;
     savePaymentStatus(dto: {
         chaveNfe: string;
         valor?: number;
         observacoes?: string;
         tipo_imposto?: string;
+        usuario?: string;
+        itens?: FiscalConferenceItemDto[];
     }): Promise<{
+        fiscalConference: any;
         chave_nfe: string;
         data_pagamento: Date;
         valor: number;
@@ -40,7 +148,85 @@ export declare class IcmsService {
         status: string;
         valor: number;
         tipo_imposto?: string;
+        guiaGerada?: boolean;
+        guiaPath?: string;
+        status_conferencia_produtos?: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
     }>>;
+    getPaymentStatusByKey(chaveNfe: string): Promise<{
+        chaveNfe: string;
+        status: string;
+        valor: number;
+        tipo_imposto: string;
+        data_pagamento: Date;
+        status_conferencia_produtos: "OK" | "ERRO" | "SEM_RELACIONAMENTO" | "PENDENTE";
+        itens_conciliacao: {
+            n_item: any;
+            cod_prod_fornecedor: any;
+            pro_codigo: any;
+            destinacao_mercadoria: any;
+            imposto_escolhido: any;
+            possui_icms_st: any;
+            possui_difal: any;
+            ncm_xml: any;
+            cst_nota: any;
+            divergencias_json: string[];
+            status_conferencia: any;
+            updated_at: any;
+        }[];
+        guia_gerada: boolean;
+        guia: {
+            bucket: any;
+            path: any;
+            original_file_name: any;
+            numero_documento: any;
+            data_vencimento: any;
+            valor: any;
+            fe_cte: any;
+            numero_nf_extraido: any;
+            fe_cte_confere: any;
+            aviso: any;
+            uploaded_at: any;
+        };
+    }>;
+    uploadGuiaByNfe(chaveNfe: string, file: {
+        buffer: Buffer;
+        originalname: string;
+        mimetype: string;
+    }): Promise<{
+        chaveNfe: string;
+        guia_gerada: boolean;
+        bucket: string;
+        path: string;
+        original_file_name: string;
+        numero_documento: string;
+        data_vencimento: Date;
+        valor: number;
+        fe_cte: string;
+        numero_nf_extraido: string;
+        fe_cte_confere: boolean;
+        aviso: string;
+    }>;
+    getGuiaByNfe(chaveNfe: string): Promise<{
+        chaveNfe: any;
+        guia_gerada: boolean;
+        bucket: any;
+        path: any;
+        original_file_name: string;
+        numero_documento: any;
+        data_vencimento: any;
+        valor: any;
+        fe_cte: any;
+        numero_nf_extraido: any;
+        fe_cte_confere: any;
+        aviso: any;
+        uploaded_at: any;
+        updated_at: any;
+    }>;
+    downloadGuiaByNfe(chaveNfe: string): Promise<{
+        stream: import("stream").Readable;
+        fileName: string;
+    }>;
+    removeGuiaByNfe(chaveNfe: string): Promise<boolean>;
     generateDanfe(xml: string): Promise<Buffer>;
     generateDanfeZip(invoices: {
         xml: string;

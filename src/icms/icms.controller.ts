@@ -1,7 +1,9 @@
-import { Body, Controller, Get, Post, Query, StreamableFile, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
+import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @ApiTags('icms')
 @Controller('icms')
@@ -11,6 +13,43 @@ export class IcmsController {
     @Get('nfe-distribuicao')
     async getInvoices(@Query('start') start?: string, @Query('end') end?: string) {
         return this.service.syncInvoices(start, end);
+    }
+
+    @Get('nfe-distribuicao/:chaveNfe')
+    async getInvoiceByKey(@Param('chaveNfe') chaveNfe: string) {
+        const invoice = await this.service.getInvoiceByKey(chaveNfe);
+        if (!invoice) {
+            throw new NotFoundException(`NF não encontrada: ${chaveNfe}`);
+        }
+        return invoice;
+    }
+
+    @Post('nfe-lancadas/sync')
+    async syncLaunchedInvoices() {
+        return this.service.startLaunchedInvoicesSyncJob();
+    }
+
+    @Get('nfe-lancadas/sync/:jobId')
+    async getSyncLaunchedInvoicesStatus(@Param('jobId') jobId: string) {
+        const status = this.service.getLaunchedInvoicesSyncJob(jobId);
+        if (!status) {
+            throw new NotFoundException(`Job não encontrado: ${jobId}`);
+        }
+        return status;
+    }
+
+    @Post('xml/normalize')
+    async startXmlNormalization(@Body() body?: { batchSize?: number }) {
+        return this.service.startXmlNormalizationJob(body?.batchSize ?? 500);
+    }
+
+    @Get('xml/normalize/:jobId')
+    async getXmlNormalizationStatus(@Param('jobId') jobId: string) {
+        const status = this.service.getXmlNormalizationJob(jobId);
+        if (!status) {
+            throw new NotFoundException(`Job não encontrado: ${jobId}`);
+        }
+        return status;
     }
 
     @Post('calculate')
@@ -44,10 +83,90 @@ export class IcmsController {
         return this.service.savePaymentStatus(body);
     }
 
+    @Post('fiscal-conferencia/preview')
+    async previewFiscalConference(@Body() body: FiscalConferenceRequestDto) {
+        return this.service.previewFiscalConference(body);
+    }
+
+    @Post('fiscal-conferencia')
+    async persistFiscalConference(@Body() body: FiscalConferenceRequestDto) {
+        return this.service.persistFiscalConference(body);
+    }
+
     @Get('payment-status')
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();
     }
+
+    @Get('payment-status/:chaveNfe')
+    async getPaymentStatusByKey(@Param('chaveNfe') chaveNfe: string) {
+        const status = await this.service.getPaymentStatusByKey(chaveNfe);
+        if (!status) {
+            throw new NotFoundException(`Status não encontrado para a NF: ${chaveNfe}`);
+        }
+        return status;
+    }
+
+    @Post('guia/:chaveNfe/upload')
+    @UseInterceptors(FileInterceptor('file'))
+    async uploadGuiaByNfe(
+        @Param('chaveNfe') chaveNfe: string,
+        @UploadedFile() file?: any,
+    ) {
+        if (!file) {
+            throw new BadRequestException('Arquivo PDF da guia não enviado.');
+        }
+
+        if (!file.mimetype?.toLowerCase().includes('pdf')) {
+            throw new BadRequestException('Arquivo inválido. Envie um PDF da guia.');
+        }
+
+        return this.service.uploadGuiaByNfe(chaveNfe, file);
+    }
+
+    @Get('guia/:chaveNfe')
+    async getGuiaByNfe(@Param('chaveNfe') chaveNfe: string) {
+        const guia = await this.service.getGuiaByNfe(chaveNfe);
+        if (!guia) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return guia;
+    }
+
+    @Get('guia/:chaveNfe/download')
+    async downloadGuiaByNfe(
+        @Param('chaveNfe') chaveNfe: string,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const payload = await this.service.downloadGuiaByNfe(chaveNfe);
+        if (!payload) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+
+        const utf8FileName = String(payload.fileName || 'guia.pdf');
+        const asciiFallback = utf8FileName
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-zA-Z0-9_.-]/g, '_') || 'guia.pdf';
+        const encodedUtf8FileName = encodeURIComponent(utf8FileName);
+
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodedUtf8FileName}`,
+        });
+
+        return new StreamableFile(payload.stream);
+    }
+
+    @Delete('guia/:chaveNfe')
+    async removeGuiaByNfe(@Param('chaveNfe') chaveNfe: string) {
+        const removed = await this.service.removeGuiaByNfe(chaveNfe);
+        if (!removed) {
+            throw new NotFoundException(`Guia não encontrada para a NF: ${chaveNfe}`);
+        }
+        return { success: true, chaveNfe };
+    }
+
     @Post('danfe')
     async generateDanfe(@Body() body: { xml: string }, @Res({ passthrough: true }) res: Response) {
         const buffer = await this.service.generateDanfe(body.xml);
