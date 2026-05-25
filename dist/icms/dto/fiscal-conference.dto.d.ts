@@ -12,6 +12,7 @@ export interface FiscalConferenceItemDto {
     destinacaoMercadoria: DestinacaoMercadoria;
     possuiIcmsSt?: boolean;
     possuiDifal?: boolean;
+    codigoInternoManual?: string;
 }
 export interface FiscalConferenceInvoiceDto {
     chaveNfe: string;

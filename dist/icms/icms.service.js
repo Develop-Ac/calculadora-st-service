@@ -55,6 +55,7 @@ const zlib = __importStar(require("zlib"));
 const crypto_1 = require("crypto");
 const mva_data_1 = require("./constants/mva-data");
 const monofasico_ncm_1 = require("./constants/monofasico-ncm");
+const cfop_tributados_1 = require("./constants/cfop-tributados");
 const node_pdf_nfe_1 = require("@alexssmusica/node-pdf-nfe");
 const archiver_1 = __importDefault(require("archiver"));
 const stream_1 = require("stream");
@@ -1000,7 +1001,14 @@ let IcmsService = IcmsService_1 = class IcmsService {
             const vStCalculadoRaw = Math.max(0, debitoSt - vCreditoOrigem);
             vStCalculado = parseFloat(vStCalculadoRaw.toFixed(2));
             diffSt = vStCalculado - vStDestacado;
-            if (!isDefaultMva) {
+            const cfopItem = String(prod.CFOP || '').trim();
+            const semTributacaoItem = cfopItem !== '' && !cfop_tributados_1.CFOP_INTERESTADUAIS_TRIBUTADOS.has(cfopItem);
+            if (semTributacaoItem) {
+                vStCalculado = 0;
+                diffSt = 0;
+                status = "Sem Tributação";
+            }
+            else if (!isDefaultMva) {
                 if (diffSt > 0.05)
                     status = "Guia Complementar";
                 else if (diffSt < -0.05)
@@ -1041,6 +1049,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 cstNota,
                 icmsTag,
                 possuiIcmsSt: vStDestacado > 0 || cstNota.endsWith('10') || cstNota.endsWith('60'),
+                semTributacao: semTributacaoItem,
                 refTabela: itemRef,
                 matchType: effectiveMatchType,
                 mvaNota: pMvaNota,
@@ -1080,6 +1089,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             const warnings = [];
             let hasComercializacao = false;
             let hasUsoConsumo = false;
+            let hasSemTributacao = false;
             for (const item of Array.isArray(nota === null || nota === void 0 ? void 0 : nota.itens) ? nota.itens : []) {
                 const analyzed = await this.analyzeFiscalItem({
                     chaveNfe,
@@ -1089,6 +1099,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 });
                 hasComercializacao = hasComercializacao || analyzed.destinacaoMercadoria === 'COMERCIALIZACAO';
                 hasUsoConsumo = hasUsoConsumo || analyzed.destinacaoMercadoria === 'USO_CONSUMO';
+                hasSemTributacao = hasSemTributacao || Boolean(analyzed.semTributacao);
                 if (persist) {
                     try {
                         await this.saveFiscalConferenceItem(chaveNfe, analyzed);
@@ -1112,6 +1123,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 flagsNota: {
                     compraComercializacao: hasComercializacao,
                     usoConsumo: hasUsoConsumo,
+                    semTributacao: hasSemTributacao,
                 },
                 itens: itensOut,
                 warnings,
@@ -1128,6 +1140,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const normalizedCstNota = this.cleanDigits(item.cstNota || '');
         const possuiIcmsSt = Boolean(item.possuiIcmsSt || item.impostoEscolhido === 'ST');
         const possuiDifal = Boolean(item.possuiDifal || item.impostoEscolhido === 'DIFAL');
+        const cfopNota = String(item.cfop || '').trim();
+        const semTributacao = cfopNota !== '' && !cfop_tributados_1.CFOP_INTERESTADUAIS_TRIBUTADOS.has(cfopNota);
         const divergencias = [];
         const conformidades = [];
         const supplier = emitenteCnpj
@@ -1136,21 +1150,34 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if (!supplier) {
             divergencias.push('Fornecedor da nota não encontrado na Stage_Fornecedores pelo CPF/CNPJ do emitente.');
         }
+        const codigoInternoManual = String(item.codigoInternoManual || '').trim();
         let vinculo = null;
-        if ((supplier === null || supplier === void 0 ? void 0 : supplier.FOR_CODIGO) && codProdFornecedor) {
-            vinculo = await this.findSupplierProductLink(supplier.FOR_CODIGO, codProdFornecedor, item.produto, item.unidadeFornecedor);
-            if (!vinculo) {
-                divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
+        let produtoInterno = null;
+        if (codigoInternoManual) {
+            produtoInterno = await this.findInternalProduct(codigoInternoManual);
+            if (produtoInterno) {
+                conformidades.push(`Relacionamento manual com código interno ${codigoInternoManual} localizado na Stage_Produtos.`);
             }
             else {
-                conformidades.push('Relacionamento do produto do fornecedor com o código interno localizado no Sistema Celta.');
+                divergencias.push(`Código interno ${codigoInternoManual} informado manualmente não foi encontrado na Stage_Produtos.`);
             }
         }
-        const produtoInterno = (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO)
-            ? await this.findInternalProduct(vinculo.PRO_CODIGO)
-            : null;
-        if ((vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) && !produtoInterno) {
-            divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
+        else {
+            if ((supplier === null || supplier === void 0 ? void 0 : supplier.FOR_CODIGO) && codProdFornecedor) {
+                vinculo = await this.findSupplierProductLink(supplier.FOR_CODIGO, codProdFornecedor, item.produto, item.unidadeFornecedor);
+                if (!vinculo) {
+                    divergencias.push('Produto do fornecedor não foi relacionado ao nosso código interno no Sistema Celta. Por Favor Verifique!');
+                }
+                else {
+                    conformidades.push('Relacionamento do produto do fornecedor com o código interno localizado no Sistema Celta.');
+                }
+            }
+            produtoInterno = (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO)
+                ? await this.findInternalProduct(vinculo.PRO_CODIGO)
+                : null;
+            if ((vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) && !produtoInterno) {
+                divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
+            }
         }
         if (produtoInterno && item.impostoEscolhido === 'ST') {
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
@@ -1232,11 +1259,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return {
             item: item.item,
             codProdFornecedor,
-            codigoProduto: String((produtoInterno === null || produtoInterno === void 0 ? void 0 : produtoInterno.PRO_CODIGO) || (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) || ''),
+            codigoProduto: String((produtoInterno === null || produtoInterno === void 0 ? void 0 : produtoInterno.PRO_CODIGO) || (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) || codigoInternoManual || ''),
+            codigoInternoManual: codigoInternoManual || null,
             impostoEscolhido: item.impostoEscolhido,
             destinacaoMercadoria,
             possuiIcmsSt,
             possuiDifal,
+            semTributacao,
             ncmNota: item.ncmNota || null,
             cstNota: item.cstNota || null,
             fornecedor: supplier
@@ -1284,6 +1313,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 imposto_escolhido,
                 possui_icms_st,
                 possui_difal,
+                sem_tributacao,
                 ncm_xml,
                 cst_nota,
                 divergencias_json,
@@ -1291,7 +1321,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 created_at,
                 updated_at
             ) VALUES (
-                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,NOW(),NOW()
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,NOW(),NOW()
             )
             ON CONFLICT (chave_nfe, n_item)
             DO UPDATE SET
@@ -1302,12 +1332,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 imposto_escolhido = EXCLUDED.imposto_escolhido,
                 possui_icms_st = EXCLUDED.possui_icms_st,
                 possui_difal = EXCLUDED.possui_difal,
+                sem_tributacao = EXCLUDED.sem_tributacao,
                 ncm_xml = EXCLUDED.ncm_xml,
                 cst_nota = EXCLUDED.cst_nota,
                 divergencias_json = EXCLUDED.divergencias_json,
                 status_conferencia = EXCLUDED.status_conferencia,
                 updated_at = NOW()
-            `, chaveNfe, analyzed.item, analyzed.codProdFornecedor, ((_a = analyzed.fornecedor) === null || _a === void 0 ? void 0 : _a.forCodigo) || null, ((_b = analyzed.produtoInterno) === null || _b === void 0 ? void 0 : _b.proCodigo) || ((_c = analyzed.produtoVinculado) === null || _c === void 0 ? void 0 : _c.proCodigo) || null, analyzed.destinacaoMercadoria, analyzed.impostoEscolhido, Boolean(analyzed.possuiIcmsSt), Boolean(analyzed.possuiDifal), analyzed.ncmNota, analyzed.cstNota, JSON.stringify(analyzed.divergencias || []), analyzed.statusConferencia);
+            `, chaveNfe, analyzed.item, analyzed.codProdFornecedor, ((_a = analyzed.fornecedor) === null || _a === void 0 ? void 0 : _a.forCodigo) || null, ((_b = analyzed.produtoInterno) === null || _b === void 0 ? void 0 : _b.proCodigo) || ((_c = analyzed.produtoVinculado) === null || _c === void 0 ? void 0 : _c.proCodigo) || null, analyzed.destinacaoMercadoria, analyzed.impostoEscolhido, Boolean(analyzed.possuiIcmsSt), Boolean(analyzed.possuiDifal), Boolean(analyzed.semTributacao), analyzed.ncmNota, analyzed.cstNota, JSON.stringify(analyzed.divergencias || []), analyzed.statusConferencia);
     }
     async saveFiscalConferenceSummary(chaveNfe, compraComercializacao, usoConsumo) {
         await this.prisma.$executeRawUnsafe(`

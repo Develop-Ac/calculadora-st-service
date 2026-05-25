@@ -160,5 +160,73 @@ exports.CSV_DATA_CLEAN = `Item;CEST;NCM_SH;MVA;Descricao
 126.0;01.126.00;9032.20.00;0.5039;Pressostatos
 127.0;01.127.00;8716.90;0.5039;Peças reboques
 128.0;01.128.00;7322.90.10;0.5039;Geradores ar quente
-999.0;01.999.00;OUTROS;0.5039;Outras peças automotivas não listadas`;
+999.0;01.999.00;OUTROS;0.5039;Outras peças automotivas não listadas
+5001.0;08.001.00;4016.99.90;0.4187;Ferramentas de borracha vulcanizada
+5002.0;08.002.00;4417.00.10;0.4187;Ferramentas de madeira
+5002.0;08.002.00;4417.00.90;0.4187;Ferramentas, armações e cabos de madeira
+5003.0;08.003.00;6804;0.4187;Mós e artefatos abrasivos
+5004.0;08.004.00;8201;0.4187;Pás, alviões, picaretas, enxadas
+5005.0;08.005.00;8202.20.00;0.4187;Folhas de serras de fita
+5006.0;08.006.00;8202.91.00;0.4187;Lâminas de serras máquinas
+5007.0;08.007.00;8202;0.4187;Serras manuais e folhas de serras
+5008.0;08.008.00;8203;0.4187;Limas, grosas, alicates manuais
+5009.0;08.009.00;8204;0.4187;Chaves de porcas manuais
+5010.0;08.010.00;8205;0.4187;Ferramentas manuais diversas
+5011.0;08.011.00;8206.00.00;0.4187;Ferramentas sortidas para venda a retalho
+5012.0;08.012.00;8207.40;0.4187;Ferramentas de roscar
+5012.0;08.012.00;8207.60;0.4187;Ferramentas de mandrilar e brochar
+5012.0;08.012.00;8207.70;0.4187;Ferramentas de fresar
+5014.0;08.014.00;8208;0.4187;Facas e lâminas cortantes para máquinas
+5015.0;08.015.00;8209.00.11;0.4187;Plaquetas intercambiáveis
+5016.0;08.016.00;8209.00;0.4187;Outras plaquetas para ferramentas
+5017.0;08.017.00;8211;0.4187;Facas de lâmina cortante
+5018.0;08.018.00;8213;0.4187;Tesouras e suas lâminas
+5019.1;08.019.01;8467.81.00;0.6529;Moto-serras portáteis agrícolas
+5019.0;08.019.00;8467;0.4187;Ferramentas pneumáticas e hidráulicas
+5020.0;08.020.00;9015;0.4187;Instrumentos de geodesia e topografia
+5021.0;08.021.00;9017.20.00;0.4187;Instrumentos de desenho e traçado
+5021.0;08.021.00;9017.30;0.4187;Metros e micrômetros
+5021.0;08.021.00;9017.80;0.4187;Outros instrumentos de cálculo
+5021.0;08.021.00;9017.90.90;0.4187;Partes de instrumentos de desenho
+5022.0;08.022.00;9025.11.90;0.4187;Termômetros
+5022.0;08.022.00;9025.90.10;0.4187;Partes de termômetros
+5023.0;08.023.00;9025.19;0.4187;Pirômetros
+5023.0;08.023.00;9025.90.90;0.4187;Partes de pirômetros
+6005.0;09.005.00;8539.52.00;0.4931;Lâmpadas de LED
+6001.0;09.001.00;8539;0.6619;Lâmpadas elétricas
+6002.0;09.002.00;8540;0.6619;Lâmpadas eletrônicas
+6003.0;09.003.00;8504.10.00;0.8872;Reatores para lâmpadas
+6004.0;09.004.00;8536.50;0.8872;Starter
+7001.0;10.036.00;7007.19.00;0.5214;Vidros temperados para construção
+7003.0;10.038.00;7008;0.5214;Vidros isolantes de paredes múltiplas
+7004.0;10.004.00;3910.00;0.5214;Silicones para uso na construção
+7007.0;10.056.00;7315.82.00;0.5214;Correntes de elos soldados para construção
+7008.0;10.057.00;7317.00;0.5214;Tachas, pregos e percevejos
+7009.0;10.058.00;7318;0.5214;Parafusos, porcas e arruelas
+7010.0;10.059.00;7323;0.5214;Palha de ferro ou aço para construção
+7011.0;10.006.00;3917;0.4973;Tubos de plástico para uso na construção
+7012.0;10.060.00;7324;0.5214;Artefatos de higiene de ferro ou aço
+7014.0;10.062.00;7326;0.5214;Abraçadeiras
+7015.0;10.066.00;7415;0.5214;Tachas e parafusos de cobre
+7017.0;10.077.00;8307;0.5214;Tubos flexíveis para construção
+7018.0;10.080.00;7009;0.5214;Espelhos de vidro para construção
+8001.0;11.005.00;3402.50.00;0.4193;Detergentes líquidos
+11001.0;16.001.00;4011.10.00;0.6227;Pneus novos para automóveis
+11002.0;16.002.00;4011;0.6227;Pneus novos para caminhões e ônibus
+11003.0;16.003.00;4011.40.00;0.6227;Pneus novos para motocicletas
+11004.0;16.004.00;4011;0.6227;Outros tipos de pneus novos
+11005.0;16.005.00;4011.50.00;0.6227;Pneus novos para bicicletas
+11006.0;16.006.00;4012.1;0.6227;Pneus recauchutados
+11007.0;16.007.00;4012.90;0.6227;Protetores de borracha
+11008.0;16.008.00;4013;0.6227;Câmaras de ar de borracha
+11009.0;16.009.00;4013.20.00;0.6227;Câmaras de ar para bicicletas
+18001.0;24.001.00;3208;0.564;Tintas e vernizes
+18001.0;24.001.00;3209;0.564;Tintas e vernizes em base aquosa
+18001.0;24.001.00;3210.00;0.564;Outras tintas e vernizes
+18002.0;24.002.00;2821;0.564;Xadrez e pós assemelhados em embalagem até 1kg
+18002.0;24.002.00;3204.17.00;0.564;Corantes para xadrez até 1kg
+18002.0;24.002.00;3206;0.564;Outros pigmentos e preparações até 1kg
+18002.1;24.002.01;3204.17.00;0.564;Corantes para xadrez acima 1kg
+18003.0;24.003.00;3205.00.00;0.564;Lacas corantes
+18003.0;24.003.00;3212;0.564;Pigmentos e corantes para tintas`;
 //# sourceMappingURL=mva-data.js.map
