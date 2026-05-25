@@ -16,7 +16,6 @@ exports.IcmsController = void 0;
 const common_1 = require("@nestjs/common");
 const icms_service_1 = require("./icms.service");
 const swagger_1 = require("@nestjs/swagger");
-const fastify_multer_1 = require("@nest-lab/fastify-multer");
 let IcmsController = class IcmsController {
     constructor(service) {
         this.service = service;
@@ -230,7 +229,6 @@ __decorate([
 ], IcmsController.prototype, "getPaymentStatusByKey", null);
 __decorate([
     (0, common_1.Post)('guia/:chaveNfe/upload'),
-    (0, common_1.UseInterceptors)((0, fastify_multer_1.FileInterceptor)('file')),
     __param(0, (0, common_1.Param)('chaveNfe')),
     __param(1, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),

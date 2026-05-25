@@ -1,51 +1,50 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import * as bodyParser from 'body-parser';
+import helmet from 'helmet';
 import * as dotenv from 'dotenv';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
     Logger.log('Starting bootstrap...', 'Bootstrap');
     try { dotenv.config(); } catch (_) { }
-    const app = await NestFactory.create<NestFastifyApplication>(
-        AppModule,
-        new FastifyAdapter({ bodyLimit: 50 * 1024 * 1024 }),
-        { bufferLogs: true },
+    const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+
+    app.use(
+        helmet({
+            contentSecurityPolicy: false,
+            crossOriginEmbedderPolicy: false,
+        }),
     );
 
-    await app.register(require('@fastify/helmet'), {
-        contentSecurityPolicy: false,
-        crossOriginEmbedderPolicy: false,
-    });
+    app.use(['/docs', '/docs-json'], (req, res, next) => {
+        const authHeader = req.headers.authorization;
 
-    await app.register(require('@nest-lab/fastify-multer').default);
-
-    // Swagger Basic Auth
-    const fastify = app.getHttpAdapter().getInstance();
-    fastify.addHook('onRequest', async (request: any, reply: any) => {
-        const url: string = request.url ?? '';
-        if (!url.startsWith('/docs') && !url.startsWith('/docs-json')) return;
-
-        const authHeader: string = request.headers['authorization'] ?? '';
         const user = 'admin';
         const password = 'Ac@2025acesso';
 
         if (!authHeader || !authHeader.startsWith('Basic ')) {
-            reply.header('WWW-Authenticate', 'Basic realm="Swagger"');
-            reply.status(401).send('Autenticação necessária');
-            return;
+        res.setHeader('WWW-Authenticate', 'Basic realm="Swagger"');
+        return res.status(401).send('Autenticação necessária');
         }
 
         const base64Credentials = authHeader.split(' ')[1];
         const credentials = Buffer.from(base64Credentials, 'base64').toString('utf8');
+
         const [inputUser, inputPassword] = credentials.split(':');
 
         if (inputUser !== user || inputPassword !== password) {
-            reply.header('WWW-Authenticate', 'Basic realm="Swagger"');
-            reply.status(401).send('Usuário ou senha inválidos');
+        res.setHeader('WWW-Authenticate', 'Basic realm="Swagger"');
+        return res.status(401).send('Usuário ou senha inválidos');
         }
+
+        next();
     });
+
+    app.use(bodyParser.json({ limit: '50mb' }));
+    app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
     const normalizeOrigin = (value?: string | null) => {
         if (!value) return '';
@@ -93,11 +92,12 @@ async function bootstrap() {
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
 
-    fastify.get('/', (request: any, reply: any) => {
+    const httpServer = app.getHttpAdapter().getInstance();
+    httpServer.get('/', (req, res) => {
         const requesterIp =
-            request.headers['x-forwarded-for'] ?? request.socket?.remoteAddress ?? 'unknown';
+            req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? req.connection?.remoteAddress ?? 'unknown';
         Logger.log(`Requisicao de status recebida de ${requesterIp}`, 'Bootstrap');
-        reply.status(200).send({
+        res.status(200).json({
             status: 'online',
             message: 'O servidor está online e funcional',
             docs: '/api/docs',

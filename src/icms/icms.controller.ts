@@ -3,7 +3,6 @@ import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
-import { FileInterceptor } from '@nest-lab/fastify-multer';
 
 @ApiTags('icms')
 @Controller('icms')
@@ -108,7 +107,6 @@ export class IcmsController {
     }
 
     @Post('guia/:chaveNfe/upload')
-    @UseInterceptors(FileInterceptor('file'))
     async uploadGuiaByNfe(
         @Param('chaveNfe') chaveNfe: string,
         @UploadedFile() file?: any,
