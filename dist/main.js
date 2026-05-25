@@ -51,6 +51,7 @@ async function bootstrap() {
         contentSecurityPolicy: false,
         crossOriginEmbedderPolicy: false,
     });
+    await app.register(require('@nest-lab/fastify-multer').default);
     const fastify = app.getHttpAdapter().getInstance();
     fastify.addHook('onRequest', async (request, reply) => {
         var _a, _b;

@@ -19,6 +19,8 @@ async function bootstrap() {
         crossOriginEmbedderPolicy: false,
     });
 
+    await app.register(require('@nest-lab/fastify-multer').default);
+
     // Swagger Basic Auth
     const fastify = app.getHttpAdapter().getInstance();
     fastify.addHook('onRequest', async (request: any, reply: any) => {

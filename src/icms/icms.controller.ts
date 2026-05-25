@@ -3,7 +3,7 @@ import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nest-lab/fastify-multer';
 
 @ApiTags('icms')
 @Controller('icms')
