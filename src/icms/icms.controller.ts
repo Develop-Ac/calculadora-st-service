@@ -3,8 +3,7 @@ import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FiscalConferenceRequestDto } from './dto/fiscal-conference.dto';
-
-@ApiTags('icms')
+import { FileInterceptor } from '@nestjs/platform-express';
 @Controller('icms')
 export class IcmsController {
     constructor(private readonly service: IcmsService) { }
