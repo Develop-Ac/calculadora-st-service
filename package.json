@@ -12,10 +12,12 @@
     },
     "dependencies": {
         "@alexssmusica/node-pdf-nfe": "^1.2.3",
+        "@fastify/helmet": "^13.0.2",
         "@nestjs/common": "^10.0.0",
         "@nestjs/config": "^3.0.0",
         "@nestjs/core": "^10.0.0",
-        "@nestjs/platform-express": "^10.0.0",
+        "@nestjs/platform-fastify": "^10.0.0",
+        "@nestjs/platform-fastify": "^10.0.0",
         "@nestjs/swagger": "^7.4.2",
         "@prisma/client": "^5.0.0",
         "@types/archiver": "^7.0.0",
