@@ -39,6 +39,16 @@ let IcmsController = class IcmsController {
         }
         return status;
     }
+    async startNfEntradaBackfill() {
+        return this.service.startNfEntradaBackfillJob();
+    }
+    async getNfEntradaBackfillStatus(jobId) {
+        const status = this.service.getNfEntradaBackfillJob(jobId);
+        if (!status) {
+            throw new common_1.NotFoundException(`Job não encontrado: ${jobId}`);
+        }
+        return status;
+    }
     async startXmlNormalization(body) {
         var _a;
         return this.service.startXmlNormalizationJob((_a = body === null || body === void 0 ? void 0 : body.batchSize) !== null && _a !== void 0 ? _a : 500);
@@ -171,6 +181,19 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getSyncLaunchedInvoicesStatus", null);
+__decorate([
+    (0, common_1.Post)('nfe-entrada/backfill'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "startNfEntradaBackfill", null);
+__decorate([
+    (0, common_1.Get)('nfe-entrada/backfill/:jobId'),
+    __param(0, (0, common_1.Param)('jobId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getNfEntradaBackfillStatus", null);
 __decorate([
     (0, common_1.Post)('xml/normalize'),
     __param(0, (0, common_1.Body)()),

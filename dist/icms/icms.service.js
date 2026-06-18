@@ -72,6 +72,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.monofasicoNcmSet = new Set(monofasico_ncm_1.MONOFASICO_NCM_LIST.map((ncm) => this.cleanDigits(ncm)));
         this.launchedSyncJobs = new Map();
         this.xmlNormalizationJobs = new Map();
+        this.nfEntradaBackfillJobs = new Map();
         this.parseReferenceData();
     }
     parseReferenceData() {
@@ -130,7 +131,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 await Promise.all(chunk.map(task => task()));
             }
             if (erpKeys.size > 0) {
-                await this.prisma.nfeConciliacao.updateMany({
+                const missing = await this.prisma.nfeConciliacao.findMany({
                     where: {
                         status_erp: 'PENDENTE',
                         data_emissao: {
@@ -139,8 +140,34 @@ let IcmsService = IcmsService_1 = class IcmsService {
                         },
                         chave_nfe: { notIn: Array.from(erpKeys) },
                     },
-                    data: { status_erp: 'LANCADA' }
+                    select: { chave_nfe: true },
                 });
+                const missingKeys = missing.map((m) => m.chave_nfe);
+                if (missingKeys.length > 0) {
+                    const entradaDates = await this.fetchNfEntradaDatesByKeys(missingKeys);
+                    const lancadas = missingKeys
+                        .filter((chave) => entradaDates.has(chave))
+                        .map((chave) => { var _a; return ({ chave, dt_entrada: (_a = entradaDates.get(chave)) !== null && _a !== void 0 ? _a : null }); });
+                    const excluidas = missingKeys.filter((chave) => !entradaDates.has(chave));
+                    const updateBatchSize = 20;
+                    for (let i = 0; i < lancadas.length; i += updateBatchSize) {
+                        const chunk = lancadas.slice(i, i + updateBatchSize);
+                        await Promise.all(chunk.map((l) => this.prisma.nfeConciliacao.update({
+                            where: { chave_nfe: l.chave },
+                            data: {
+                                status_erp: 'LANCADA',
+                                dt_entrada: l.dt_entrada,
+                                updated_at: new Date(),
+                            },
+                        })));
+                    }
+                    if (excluidas.length > 0) {
+                        await this.prisma.nfeConciliacao.updateMany({
+                            where: { chave_nfe: { in: excluidas } },
+                            data: { status_erp: 'EXCLUIDA' },
+                        });
+                    }
+                }
             }
             const allLocal = await this.prisma.nfeConciliacao.findMany({
                 where: {
@@ -163,6 +190,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     NOME_EMITENTE: local.emitente,
                     CPF_CNPJ_EMITENTE: local.cnpj_emitente,
                     DATA_EMISSAO: local.data_emissao,
+                    DT_ENTRADA: local.dt_entrada,
                     VALOR_TOTAL: valorTotal,
                     STATUS_ERP: local.status_erp,
                     TIPO_OPERACAO: local.tipo_operacao,
@@ -215,6 +243,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             NOME_EMITENTE: local.emitente,
             CPF_CNPJ_EMITENTE: local.cnpj_emitente,
             DATA_EMISSAO: local.data_emissao,
+            DT_ENTRADA: local.dt_entrada,
             VALOR_TOTAL: valorTotal,
             STATUS_ERP: local.status_erp,
             TIPO_OPERACAO: local.tipo_operacao,
@@ -577,6 +606,37 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return rows
             .map(r => String(r.CHAVE_NFE || '').trim())
             .filter(Boolean);
+    }
+    async fetchNfEntradaDatesByKeys(keys) {
+        const result = new Map();
+        if (!keys.length)
+            return result;
+        const batchSize = 100;
+        for (let offset = 0; offset < keys.length; offset += batchSize) {
+            const batchKeys = keys.slice(offset, offset + batchSize);
+            const inList = batchKeys
+                .map((k) => `'${String(k).replace(/'/g, "''")}'`)
+                .join(',');
+            const sql = `
+      SELECT
+          E.CHAVE_NFE,
+          E.DT_ENTRADA
+      FROM NF_ENTRADA E
+      WHERE E.EMPRESA = 1
+        AND E.CHAVE_NFE IN (${inList})
+    `;
+            const firebirdSql = sql.replace(/'/g, "''");
+            const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+            const rows = await this.openQuery.query(tsql, {}, { timeout: 300000, allowZeroRows: true });
+            for (const row of rows) {
+                const chave = String(row.CHAVE_NFE || '').trim();
+                if (!chave)
+                    continue;
+                const dt = row.DT_ENTRADA ? new Date(row.DT_ENTRADA) : null;
+                result.set(chave, dt && !Number.isNaN(dt.getTime()) ? dt : null);
+            }
+        }
+        return result;
     }
     async fetchEntradaXmlInvoicesByKeys(keys) {
         if (!keys.length)

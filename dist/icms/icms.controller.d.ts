@@ -10,6 +10,7 @@ export declare class IcmsController {
         NOME_EMITENTE: string;
         CPF_CNPJ_EMITENTE: string;
         DATA_EMISSAO: Date;
+        DT_ENTRADA: Date;
         VALOR_TOTAL: number;
         STATUS_ERP: string;
         TIPO_OPERACAO: number;
@@ -24,6 +25,7 @@ export declare class IcmsController {
         NOME_EMITENTE: string;
         CPF_CNPJ_EMITENTE: string;
         DATA_EMISSAO: Date;
+        DT_ENTRADA: Date;
         VALOR_TOTAL: number;
         STATUS_ERP: string;
         TIPO_OPERACAO: number;
@@ -48,6 +50,8 @@ export declare class IcmsController {
         completedAt?: string;
         errorMessage?: string;
     }>;
+    startNfEntradaBackfill(): Promise<any>;
+    getNfEntradaBackfillStatus(jobId: string): Promise<any>;
     startXmlNormalization(body?: {
         batchSize?: number;
     }): Promise<{

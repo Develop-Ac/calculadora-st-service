@@ -12,6 +12,7 @@ export declare class IcmsService {
     private readonly monofasicoNcmSet;
     private readonly launchedSyncJobs;
     private readonly xmlNormalizationJobs;
+    private readonly nfEntradaBackfillJobs;
     constructor(openQuery: OpenQueryService, prisma: PrismaService);
     private parseReferenceData;
     syncInvoices(start?: string, end?: string): Promise<{
@@ -19,6 +20,7 @@ export declare class IcmsService {
         NOME_EMITENTE: string;
         CPF_CNPJ_EMITENTE: string;
         DATA_EMISSAO: Date;
+        DT_ENTRADA: Date;
         VALOR_TOTAL: number;
         STATUS_ERP: string;
         TIPO_OPERACAO: number;
@@ -39,6 +41,7 @@ export declare class IcmsService {
         NOME_EMITENTE: string;
         CPF_CNPJ_EMITENTE: string;
         DATA_EMISSAO: Date;
+        DT_ENTRADA: Date;
         VALOR_TOTAL: number;
         STATUS_ERP: string;
         TIPO_OPERACAO: number;
@@ -89,6 +92,7 @@ export declare class IcmsService {
     fetchErpInvoices(start?: string, end?: string): Promise<any[]>;
     fetchEntradaXmlInvoices(): Promise<any[]>;
     fetchEntradaXmlKeys(): Promise<string[]>;
+    fetchNfEntradaDatesByKeys(keys: string[]): Promise<Map<string, Date | null>>;
     fetchEntradaXmlInvoicesByKeys(keys: string[]): Promise<any[]>;
     private decodeXml;
     private encodeXml;
