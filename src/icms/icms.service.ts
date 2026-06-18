@@ -142,10 +142,14 @@ export class IcmsService {
                 await Promise.all(chunk.map(task => task()));
             }
 
-            // 3. Detect Missing Items (LANCADA)
-            // Atualiza em massa no recorte da consulta para evitar varrer histórico inteiro
+            // 3. Detect Missing Items (saíram da tabela temporária NFE_DISTRIBUICAO)
+            // Sair da temporária NÃO significa lançada: precisamos confirmar na NF_ENTRADA.
+            // - Está na NF_ENTRADA  -> LANCADA (e grava DT_ENTRADA no Postgres)
+            // - Não está na NF_ENTRADA -> EXCLUIDA
+            // Só roda quando a consulta ao ERP retornou chaves; assim uma falha/retorno
+            // vazio do ERP não marca notas pendentes como EXCLUIDA indevidamente.
             if (erpKeys.size > 0) {
-                await this.prisma.nfeConciliacao.updateMany({
+                const missing = await this.prisma.nfeConciliacao.findMany({
                     where: {
                         status_erp: 'PENDENTE',
                         data_emissao: {
@@ -154,8 +158,45 @@ export class IcmsService {
                         },
                         chave_nfe: { notIn: Array.from(erpKeys) },
                     },
-                    data: { status_erp: 'LANCADA' }
+                    select: { chave_nfe: true },
                 });
+                const missingKeys = missing.map((m) => m.chave_nfe);
+
+                if (missingKeys.length > 0) {
+                    // Confirma o lançamento real na NF_ENTRADA e obtém a DT_ENTRADA.
+                    const entradaDates = await this.fetchNfEntradaDatesByKeys(missingKeys);
+
+                    const lancadas = missingKeys
+                        .filter((chave) => entradaDates.has(chave))
+                        .map((chave) => ({ chave, dt_entrada: entradaDates.get(chave) ?? null }));
+                    const excluidas = missingKeys.filter((chave) => !entradaDates.has(chave));
+
+                    // LANCADA: atualização individual pois cada nota tem sua própria DT_ENTRADA.
+                    const updateBatchSize = 20;
+                    for (let i = 0; i < lancadas.length; i += updateBatchSize) {
+                        const chunk = lancadas.slice(i, i + updateBatchSize);
+                        await Promise.all(
+                            chunk.map((l) =>
+                                this.prisma.nfeConciliacao.update({
+                                    where: { chave_nfe: l.chave },
+                                    data: {
+                                        status_erp: 'LANCADA',
+                                        dt_entrada: l.dt_entrada,
+                                        updated_at: new Date(),
+                                    },
+                                }),
+                            ),
+                        );
+                    }
+
+                    // EXCLUIDA: saiu da temporária e não foi encontrada na NF_ENTRADA.
+                    if (excluidas.length > 0) {
+                        await this.prisma.nfeConciliacao.updateMany({
+                            where: { chave_nfe: { in: excluidas } },
+                            data: { status_erp: 'EXCLUIDA' },
+                        });
+                    }
+                }
             }
 
             // 4. Return Merged List
@@ -183,6 +224,7 @@ export class IcmsService {
                     NOME_EMITENTE: local.emitente,
                     CPF_CNPJ_EMITENTE: local.cnpj_emitente,
                     DATA_EMISSAO: local.data_emissao,
+                    DT_ENTRADA: local.dt_entrada,
                     VALOR_TOTAL: valorTotal,
                     STATUS_ERP: local.status_erp,
                     TIPO_OPERACAO: local.tipo_operacao,
@@ -241,6 +283,7 @@ export class IcmsService {
             NOME_EMITENTE: local.emitente,
             CPF_CNPJ_EMITENTE: local.cnpj_emitente,
             DATA_EMISSAO: local.data_emissao,
+            DT_ENTRADA: local.dt_entrada,
             VALOR_TOTAL: valorTotal,
             STATUS_ERP: local.status_erp,
             TIPO_OPERACAO: local.tipo_operacao,
@@ -665,6 +708,47 @@ export class IcmsService {
         return rows
             .map(r => String(r.CHAVE_NFE || '').trim())
             .filter(Boolean);
+    }
+
+    /**
+     * Confirma, na tabela NF_ENTRADA do ERP, quais das chaves informadas foram
+     * efetivamente lançadas e retorna a DT_ENTRADA de cada uma.
+     * Retorna um Map<CHAVE_NFE, DT_ENTRADA | null>; chaves AUSENTES no Map
+     * significam que a nota não está na NF_ENTRADA (ou seja, foi excluída).
+     */
+    async fetchNfEntradaDatesByKeys(keys: string[]): Promise<Map<string, Date | null>> {
+        const result = new Map<string, Date | null>();
+        if (!keys.length) return result;
+
+        const batchSize = 100;
+        for (let offset = 0; offset < keys.length; offset += batchSize) {
+            const batchKeys = keys.slice(offset, offset + batchSize);
+            const inList = batchKeys
+                .map((k) => `'${String(k).replace(/'/g, "''")}'`)
+                .join(',');
+
+            const sql = `
+      SELECT
+          E.CHAVE_NFE,
+          E.DT_ENTRADA
+      FROM NF_ENTRADA E
+      WHERE E.EMPRESA = 1
+        AND E.CHAVE_NFE IN (${inList})
+    `;
+
+            const firebirdSql = sql.replace(/'/g, "''");
+            const tsql = `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql}')`;
+
+            const rows = await this.openQuery.query<any>(tsql, {}, { timeout: 300000, allowZeroRows: true });
+            for (const row of rows) {
+                const chave = String(row.CHAVE_NFE || '').trim();
+                if (!chave) continue;
+                const dt = row.DT_ENTRADA ? new Date(row.DT_ENTRADA) : null;
+                result.set(chave, dt && !Number.isNaN(dt.getTime()) ? dt : null);
+            }
+        }
+
+        return result;
     }
 
     async fetchEntradaXmlInvoicesByKeys(keys: string[]) {

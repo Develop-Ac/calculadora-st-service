@@ -29,8 +29,11 @@ model NfeConciliacao {
   valor_guia     Float    @default(0.0)
   
   // ERP Status (ETL)
-  status_erp     String   @default("PENDENTE") // PENDENTE, LANCADA
-  
+  status_erp     String   @default("PENDENTE") // PENDENTE, LANCADA, EXCLUIDA
+
+  // Data de entrada confirmada na NF_ENTRADA do ERP (preenchida ao confirmar lançamento)
+  dt_entrada     DateTime?
+
   // Operation Details
   tipo_operacao       Int    @default(0) // 0 - Entrada, 1 - Saída
   tipo_operacao_desc  String @default("ENTRADA PRÓPRIA")
