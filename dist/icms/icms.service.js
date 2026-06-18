@@ -72,7 +72,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.monofasicoNcmSet = new Set(monofasico_ncm_1.MONOFASICO_NCM_LIST.map((ncm) => this.cleanDigits(ncm)));
         this.launchedSyncJobs = new Map();
         this.xmlNormalizationJobs = new Map();
-        this.nfEntradaBackfillJobs = new Map();
         this.parseReferenceData();
     }
     parseReferenceData() {
@@ -166,6 +165,29 @@ let IcmsService = IcmsService_1 = class IcmsService {
                             where: { chave_nfe: { in: excluidas } },
                             data: { status_erp: 'EXCLUIDA' },
                         });
+                    }
+                    if (lancadas.length > 0) {
+                        const base = process.env.COMPRAS_SERVICE_URL;
+                        if (!base) {
+                            this.logger.warn('COMPRAS_SERVICE_URL não configurada: pulando notificação de NF lançada ao compras-service.', 'Sync');
+                        }
+                        else {
+                            try {
+                                await fetch(`${base}/compras/vinculacao-nfe/nf-lancada`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        lancadas: lancadas.map((l) => ({
+                                            chave_nfe: l.chave,
+                                            dt_entrada: l.dt_entrada,
+                                        })),
+                                    }),
+                                });
+                            }
+                            catch (e) {
+                                this.logger.error('Falha ao notificar compras-service de NF lançada', e instanceof Error ? e.stack : String(e), 'Sync');
+                            }
+                        }
                     }
                 }
             }

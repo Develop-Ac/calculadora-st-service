@@ -196,6 +196,38 @@ export class IcmsService {
                             data: { status_erp: 'EXCLUIDA' },
                         });
                     }
+
+                    // Avisa o compras-service que essas NF viraram LANCADA, para
+                    // marcar os pedidos vinculados como 'Entregue' + data_recebimento.
+                    // Falha de rede NÃO pode quebrar o sync (try/catch).
+                    if (lancadas.length > 0) {
+                        const base = process.env.COMPRAS_SERVICE_URL;
+                        if (!base) {
+                            this.logger.warn(
+                                'COMPRAS_SERVICE_URL não configurada: pulando notificação de NF lançada ao compras-service.',
+                                'Sync',
+                            );
+                        } else {
+                            try {
+                                await fetch(`${base}/compras/vinculacao-nfe/nf-lancada`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        lancadas: lancadas.map((l) => ({
+                                            chave_nfe: l.chave,
+                                            dt_entrada: l.dt_entrada,
+                                        })),
+                                    }),
+                                });
+                            } catch (e) {
+                                this.logger.error(
+                                    'Falha ao notificar compras-service de NF lançada',
+                                    e instanceof Error ? e.stack : String(e),
+                                    'Sync',
+                                );
+                            }
+                        }
+                    }
                 }
             }
 

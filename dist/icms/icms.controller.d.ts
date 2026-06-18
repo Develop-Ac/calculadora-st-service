@@ -50,8 +50,6 @@ export declare class IcmsController {
         completedAt?: string;
         errorMessage?: string;
     }>;
-    startNfEntradaBackfill(): Promise<any>;
-    getNfEntradaBackfillStatus(jobId: string): Promise<any>;
     startXmlNormalization(body?: {
         batchSize?: number;
     }): Promise<{

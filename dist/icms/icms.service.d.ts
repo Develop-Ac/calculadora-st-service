@@ -12,7 +12,6 @@ export declare class IcmsService {
     private readonly monofasicoNcmSet;
     private readonly launchedSyncJobs;
     private readonly xmlNormalizationJobs;
-    private readonly nfEntradaBackfillJobs;
     constructor(openQuery: OpenQueryService, prisma: PrismaService);
     private parseReferenceData;
     syncInvoices(start?: string, end?: string): Promise<{
