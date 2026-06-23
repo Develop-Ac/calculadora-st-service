@@ -106,6 +106,7 @@ export class IcmsController {
     }
 
     @Post('guia/:chaveNfe/upload')
+    @UseInterceptors(FileInterceptor('file'))
     async uploadGuiaByNfe(
         @Param('chaveNfe') chaveNfe: string,
         @UploadedFile() file?: any,
