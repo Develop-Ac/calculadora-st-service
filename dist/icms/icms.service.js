@@ -1536,7 +1536,15 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
     }
-    async findInternalProduct(proCodigo) {
+    async findInternalProduct(proCodigo, direto = false) {
+        var _a, _b;
+        if (direto) {
+            return (_a = (await this.findInternalProductErp(proCodigo))) !== null && _a !== void 0 ? _a : (await this.findInternalProductStage(proCodigo));
+        }
+        return (_b = (await this.findInternalProductStage(proCodigo))) !== null && _b !== void 0 ? _b : (await this.findInternalProductErp(proCodigo));
+    }
+    async findInternalProductStage(proCodigo) {
+        var _a;
         const rows = await this.openQuery.query(`
             SELECT TOP 1
                 PRO_CODIGO,
@@ -1551,9 +1559,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             FROM [BI].[dbo].[Stage_Produtos]
             WHERE PRO_CODIGO = @proCodigo
             `, { proCodigo }, { allowZeroRows: true });
-        if (rows[0])
-            return rows[0];
-        return this.findInternalProductErp(proCodigo);
+        return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
     }
     async findInternalProductErp(proCodigo) {
         var _a;
@@ -1845,16 +1851,54 @@ let IcmsService = IcmsService_1 = class IcmsService {
             const regras = await this.prisma.$queryRawUnsafe(`SELECT * FROM com_fiscal_regra WHERE ativo = true`);
             const opfRows = await this.prisma.$queryRawUnsafe(`SELECT opf_codigo, destinacao FROM com_fiscal_opf_destinacao WHERE ativo = true`);
             const origemRows = await this.prisma.$queryRawUnsafe(`SELECT origem_de, origem_para FROM com_fiscal_origem_cst WHERE ativo = true`);
+            let cfops = [];
+            try {
+                cfops = await this.prisma.$queryRawUnsafe(`SELECT cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final FROM com_fiscal_cfop WHERE ativo = true`);
+            }
+            catch (_a) {
+                cfops = [];
+            }
             this.fiscalRulesCache = {
                 regras: regras !== null && regras !== void 0 ? regras : [],
                 opf: new Map((opfRows !== null && opfRows !== void 0 ? opfRows : []).map((r) => [this.digitsOnly(r.opf_codigo), String(r.destinacao)])),
                 origem: new Map((origemRows !== null && origemRows !== void 0 ? origemRows : []).map((r) => [String(r.origem_de), String(r.origem_para)])),
+                cfops: cfops !== null && cfops !== void 0 ? cfops : [],
             };
         }
-        catch (_a) {
-            this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map() };
+        catch (_b) {
+            this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map(), cfops: [] };
         }
         return this.fiscalRulesCache;
+    }
+    cfopRegraEsperada(rules, cfopFornecedor, destinacao, temCest) {
+        var _a;
+        if (!cfopFornecedor)
+            return null;
+        const dest = String(destinacao || '').toUpperCase();
+        const cest = temCest ? 'SIM' : 'NAO';
+        let best = null;
+        let bestScore = -1;
+        for (const r of (_a = rules.cfops) !== null && _a !== void 0 ? _a : []) {
+            if (this.digitsOnly(r.cfop_fornecedor) !== cfopFornecedor)
+                continue;
+            const rd = String(r.destinacao || 'QUALQUER').toUpperCase();
+            const rc = String(r.tem_cest || 'QUALQUER').toUpperCase();
+            if (rd !== 'QUALQUER' && rd !== dest)
+                continue;
+            if (rc !== 'QUALQUER' && rc !== cest)
+                continue;
+            const score = (rd !== 'QUALQUER' ? 2 : 0) + (rc !== 'QUALQUER' ? 1 : 0);
+            if (score > bestScore) {
+                bestScore = score;
+                best = r;
+            }
+        }
+        if (!best)
+            return null;
+        return {
+            cfopEntrada: this.digitsOnly(best.cfop_entrada),
+            cstFinal: best.cst_final ? this.digitsOnly(best.cst_final).slice(-2) : null,
+        };
     }
     regraEsperadaDefault(imposto, destinacao, monofasico) {
         const I = String(imposto).toUpperCase();
@@ -1901,14 +1945,23 @@ let IcmsService = IcmsService_1 = class IcmsService {
              ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`);
         const opf = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, opf_codigo, destinacao, ativo FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`);
         const origem = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, origem_de, origem_para, ativo FROM com_fiscal_origem_cst ORDER BY origem_de`);
-        return { regras, opf, origem };
+        let cfops = [];
+        try {
+            cfops = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final, ativo, descricao
+                 FROM com_fiscal_cfop ORDER BY cfop_fornecedor, destinacao, tem_cest`);
+        }
+        catch (_a) {
+            cfops = [];
+        }
+        return { regras, opf, origem, cfops };
     }
     async saveFiscalRegras(body) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const ops = [
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_regra`),
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_opf_destinacao`),
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_origem_cst`),
+            this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_cfop`),
         ];
         const orNull = (v) => (v === undefined || v === '' ? null : v);
         for (const r of (_a = body.regras) !== null && _a !== void 0 ? _a : []) {
@@ -1925,6 +1978,12 @@ let IcmsService = IcmsService_1 = class IcmsService {
             if (!String((_e = o.origem_de) !== null && _e !== void 0 ? _e : '').trim())
                 continue;
             ops.push(this.prisma.$executeRawUnsafe(`INSERT INTO com_fiscal_origem_cst (origem_de, origem_para, ativo) VALUES ($1,$2,$3)`, String(o.origem_de).trim(), String(o.origem_para || '').trim(), o.ativo !== false));
+        }
+        for (const c of (_f = body.cfops) !== null && _f !== void 0 ? _f : []) {
+            if (!String((_g = c.cfop_fornecedor) !== null && _g !== void 0 ? _g : '').trim() || !String((_h = c.cfop_entrada) !== null && _h !== void 0 ? _h : '').trim())
+                continue;
+            ops.push(this.prisma.$executeRawUnsafe(`INSERT INTO com_fiscal_cfop (cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final, ativo, descricao)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)`, this.digitsOnly(c.cfop_fornecedor), String(c.destinacao || 'QUALQUER').toUpperCase(), String(c.tem_cest || 'QUALQUER').toUpperCase(), this.digitsOnly(c.cfop_entrada), orNull(c.cst_final ? this.digitsOnly(c.cst_final).slice(-2) : null), c.ativo !== false, orNull(c.descricao)));
         }
         await this.prisma.$transaction(ops);
         this.invalidateFiscalRules();
@@ -2006,8 +2065,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const itens = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${itemSql.replace(/'/g, "''")}')`, {}, { timeout: 300000, allowZeroRows: true });
         return { header, itens };
     }
-    async computarAuditoria(chaveNfe) {
-        var _a, _b, _c, _d, _e, _f;
+    async computarAuditoria(chaveNfe, opts = {}) {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         const nfeRow = await this.prisma.nfeConciliacao.findUnique({
             where: { chave_nfe: chaveNfe },
             select: { xml_completo: true },
@@ -2066,7 +2125,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 const notaItem = notaByItem.get(nItem);
                 const cItem = confByItem.get(nItem);
                 const checks = [];
-                const prod = proCodigo ? await this.findInternalProduct(proCodigo) : null;
+                const prod = proCodigo ? await this.findInternalProduct(proCodigo, !!opts.produtoDireto) : null;
                 const descricao = (_c = prod === null || prod === void 0 ? void 0 : prod.PRO_DESCRICAO) !== null && _c !== void 0 ? _c : null;
                 let imposto = null;
                 let destinacao = null;
@@ -2088,16 +2147,20 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     destinacao = destinacaoIntra;
                 const monofasico = this.isMonofasicoNcm(this.cleanDigits((_d = notaItem === null || notaItem === void 0 ? void 0 : notaItem.ncm) !== null && _d !== void 0 ? _d : ''));
                 const reg = this.regraEsperada(rules, imposto, destinacao, monofasico);
-                const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
+                const cfopNota = this.digitsOnly(ei.CFOP_NOTA);
+                const temCest = !!String((_e = prod === null || prod === void 0 ? void 0 : prod.CEST) !== null && _e !== void 0 ? _e : '').trim();
+                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, temCest);
+                const cfopExp = (_f = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cfopEntrada) !== null && _f !== void 0 ? _f : (reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null);
+                const cstFinalExp = (_g = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cstFinal) !== null && _g !== void 0 ? _g : reg.cstFinal;
                 if (cfopExp) {
                     checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
                 }
-                if (reg.cstFinal) {
+                if (cstFinalExp) {
                     const enc = cstFiscalLanc ? cstFiscalLanc.slice(-2) : '';
-                    checks.push({ campo: 'CST final', esperado: reg.cstFinal, encontrado: enc, ok: !enc || enc === reg.cstFinal });
+                    checks.push({ campo: 'CST final', esperado: cstFinalExp, encontrado: enc, ok: !enc || enc === cstFinalExp });
                 }
                 if ((notaItem === null || notaItem === void 0 ? void 0 : notaItem.origemNota) && cstFiscalLanc.length === 3) {
-                    const origemExp = (_e = rules.origem.get(notaItem.origemNota)) !== null && _e !== void 0 ? _e : this.origemEsperada(notaItem.origemNota);
+                    const origemExp = (_h = rules.origem.get(notaItem.origemNota)) !== null && _h !== void 0 ? _h : this.origemEsperada(notaItem.origemNota);
                     const enc = cstFiscalLanc.slice(0, 1);
                     checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
                 }
@@ -2106,7 +2169,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 }
                 else if (prod) {
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
-                    const stEsperado = String((_f = prod.CEST) !== null && _f !== void 0 ? _f : '').trim() ? 'ST0-X' : 'TR0-X';
+                    const stEsperado = String((_j = prod.CEST) !== null && _j !== void 0 ? _j : '').trim() ? 'ST0-X' : 'TR0-X';
                     const cad = [
                         ['Cadastro ST_CODIGO', stEsperado, prod.ST_CODIGO],
                         ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],
@@ -2150,7 +2213,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 where: { chave_nfe: chaveNfe },
                 select: { auditoria_alerta_em: true },
             });
-            const r = await this.computarAuditoria(chaveNfe);
+            const r = await this.computarAuditoria(chaveNfe, { produtoDireto: opts.produtoDireto });
             if (!r)
                 return;
             const erros = this.errosFromComputado(r);
@@ -2235,6 +2298,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
             cond.push(`left(c.chave_nfe, 2) = '51'`);
         else if (esc === 'FORA')
             cond.push(`left(c.chave_nfe, 2) <> '51'`);
+        const st = String(f.status || 'TODOS').toUpperCase();
+        if (st === 'PENDENTE')
+            cond.push(`c.auditoria_fiscal_status IS NULL`);
+        else if (st === 'OK' || st === 'DIVERGENTE' || st === 'SEM_CONFERENCIA') {
+            params.push(st);
+            cond.push(`c.auditoria_fiscal_status = $${params.length}`);
+        }
         return { where: cond.join(' AND '), params };
     }
     async reconferirPeriodo(f) {
@@ -2243,7 +2313,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
              ORDER BY c.dt_entrada DESC NULLS LAST LIMIT 2000`, ...params);
         const chaves = chaveRows.map((r) => r.chave_nfe);
         for (const chave of chaves) {
-            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false });
+            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false, produtoDireto: true });
         }
         const sumRows = await this.prisma.$queryRawUnsafe(`SELECT auditoria_fiscal_status AS s, count(*)::int AS c
              FROM com_nfe_conciliacao c WHERE ${where} GROUP BY auditoria_fiscal_status`, ...params);
@@ -2292,7 +2362,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             }),
         };
     }
-    async getAuditoriaDetalhe(chaveNfe) {
+    async getAuditoriaDetalhe(chaveNfe, direto = false) {
         var _a, _b, _c, _d, _e, _f, _g;
         const rows = await this.prisma.$queryRawUnsafe(`SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
                     auditoria_fiscal_status, auditoria_fiscal_em,
@@ -2301,7 +2371,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const b = rows[0];
         if (!b)
             return null;
-        const r = await this.computarAuditoria(chaveNfe);
+        const r = await this.computarAuditoria(chaveNfe, { produtoDireto: direto });
         const baseHeader = {
             chaveNfe: b.chave_nfe,
             numero: String(Number((_a = b.numero) !== null && _a !== void 0 ? _a : '0')),
@@ -2340,8 +2410,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
         };
     }
     async reconferirAuditoria(chaveNfe) {
-        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
-        return this.getAuditoriaDetalhe(chaveNfe);
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
+        return this.getAuditoriaDetalhe(chaveNfe, true);
     }
     async savePaymentStatus(dto) {
         let fiscalConference = null;

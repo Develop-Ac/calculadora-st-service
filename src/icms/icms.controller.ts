@@ -98,12 +98,13 @@ export class IcmsController {
         @Query('q') q?: string,
         @Query('emitente') emitente?: string,
         @Query('escopo') escopo?: string,
+        @Query('status') status?: string,
         @Query('dtInicio') dtInicio?: string,
         @Query('dtFim') dtFim?: string,
         @Query('page') page?: string,
         @Query('pageSize') pageSize?: string,
     ) {
-        return this.service.listAuditorias({ q, emitente, escopo, dtInicio, dtFim, page, pageSize });
+        return this.service.listAuditorias({ q, emitente, escopo, status, dtInicio, dtFim, page, pageSize });
     }
 
     @Post('auditoria/reconferir-periodo')
@@ -111,10 +112,11 @@ export class IcmsController {
         @Query('q') q?: string,
         @Query('emitente') emitente?: string,
         @Query('escopo') escopo?: string,
+        @Query('status') status?: string,
         @Query('dtInicio') dtInicio?: string,
         @Query('dtFim') dtFim?: string,
     ) {
-        return this.service.reconferirPeriodo({ q, emitente, escopo, dtInicio, dtFim });
+        return this.service.reconferirPeriodo({ q, emitente, escopo, status, dtInicio, dtFim });
     }
 
     @Get('auditoria/:chaveNfe')

@@ -396,7 +396,12 @@ Contrato do webhook (intranet → n8n):
   e devolve o detalhe atualizado.
 * `POST /icms/auditoria/reconferir-periodo` — reexecuta a auditoria de **todas as NFs
   do período filtrado** (mesmos query params da lista; sem WhatsApp; teto de 2000).
-  Retorna resumo `{ total, ok, divergente, semConferencia }`.
+  Retorna resumo `{ total, ok, divergente }`.
+
+As reconferências (individual e período) buscam o cadastro do produto **direto na
+`PRODUTOS` do ERP** (linked server `CONSULTA`, empresa 1), sem esperar o ETL do
+`Stage_Produtos` (~1 min) — assim refletem alterações de cadastro na hora. A abertura
+normal do detalhe e o sync automático continuam usando o Stage (com fallback no ERP).
 
 O `OPF_CODIGO` **apenas determina** a destinação (revenda x uso/consumo) das notas
 intra — não aparece como item de conferência.
@@ -433,7 +438,12 @@ conferência.)
 A matriz e os mapeamentos saíram do código para tabelas editáveis (script
 `sql/2026-06-24_regras_fiscais_configuraveis.sql`):
 
-* `com_fiscal_regra` — matriz `imposto × destinação (× monofásico)` → `cfop_sufixo`,
+* `com_fiscal_cfop` — **regras por CFOP de entrada (norma MT, precedência sobre a matriz):**
+  chave `cfop_fornecedor × destinacao × tem_cest` → `cfop_entrada` + `cst_final`.
+  Cobre compra, devolução, transferência, retorno, etc. Em MT o ICMS-ST/antecipação
+  se aplica ao **produto** (tem CEST), então fornecedor tributado (6102) pode virar
+  entrada ST (2403) quando o produto é ST. Script: `sql/2026-06-24_regras_cfop_entrada.sql`.
+* `com_fiscal_regra` — matriz `imposto × destinação (× monofásico)` (fallback) → `cfop_sufixo`,
   `cst_final`, `st_codigo`, `pis_codigo`, `cofins_codigo`, `subtipo`,
   `comercializavel`, `subgrp_codigo`. Campo vazio = não confere.
 * `com_fiscal_opf_destinacao` — `OPF_CODIGO` → destinação (notas intra).

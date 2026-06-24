@@ -126,6 +126,7 @@ export declare class IcmsService {
     private findSupplierByCpfCnpj;
     private findSupplierProductLink;
     private findInternalProduct;
+    private findInternalProductStage;
     private findInternalProductErp;
     private isMonofasicoNcm;
     private cleanDigits;
@@ -147,21 +148,25 @@ export declare class IcmsService {
     private fiscalRulesCache;
     private invalidateFiscalRules;
     private getFiscalRules;
+    private cfopRegraEsperada;
     private regraEsperadaDefault;
     private regraEsperada;
     getFiscalRegras(): Promise<{
         regras: any[];
         opf: any[];
         origem: any[];
+        cfops: any[];
     }>;
     saveFiscalRegras(body: {
         regras?: any[];
         opf?: any[];
         origem?: any[];
+        cfops?: any[];
     }): Promise<{
         regras: any[];
         opf: any[];
         origem: any[];
+        cfops: any[];
     }>;
     private parseNotaParaAuditoria;
     private fetchLancamentoErp;
@@ -176,6 +181,7 @@ export declare class IcmsService {
         q?: string;
         emitente?: string;
         escopo?: string;
+        status?: string;
         dtInicio?: string;
         dtFim?: string;
     }): Promise<{
@@ -187,6 +193,7 @@ export declare class IcmsService {
         q?: string;
         emitente?: string;
         escopo?: string;
+        status?: string;
         dtInicio?: string;
         dtFim?: string;
         page?: string | number;
@@ -210,7 +217,7 @@ export declare class IcmsService {
             totalErros: any;
         }[];
     }>;
-    getAuditoriaDetalhe(chaveNfe: string): Promise<{
+    getAuditoriaDetalhe(chaveNfe: string, direto?: boolean): Promise<{
         header: {
             status: any;
             totalErros: number;

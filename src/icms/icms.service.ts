@@ -1850,7 +1850,20 @@ export class IcmsService {
         return rows[0] ?? null;
     }
 
-    private async findInternalProduct(proCodigo: string) {
+    /**
+     * Cadastro do produto. Por padrão consulta o Stage (rápido) com fallback no
+     * ERP. Com `direto=true` (reconferência), consulta direto a PRODUTOS do ERP
+     * via linked server CONSULTA — sem esperar o ETL (~1 min) — e usa o Stage só
+     * como fallback.
+     */
+    private async findInternalProduct(proCodigo: string, direto = false) {
+        if (direto) {
+            return (await this.findInternalProductErp(proCodigo)) ?? (await this.findInternalProductStage(proCodigo));
+        }
+        return (await this.findInternalProductStage(proCodigo)) ?? (await this.findInternalProductErp(proCodigo));
+    }
+
+    private async findInternalProductStage(proCodigo: string) {
         const rows = await this.openQuery.query<any>(
             `
             SELECT TOP 1
@@ -1869,12 +1882,7 @@ export class IcmsService {
             { proCodigo },
             { allowZeroRows: true },
         );
-
-        if (rows[0]) return rows[0];
-
-        // Fallback: Stage pode estar desatualizado (ETL). Busca direto no banco
-        // mãe (Firebird PRODUTOS, empresa 1) via linked server CONSULTA.
-        return this.findInternalProductErp(proCodigo);
+        return rows[0] ?? null;
     }
 
     /** Fallback do cadastro do produto direto na PRODUTOS (empresa 1) do ERP. */
@@ -2240,7 +2248,7 @@ export class IcmsService {
 
     // ---- Regras fiscais configuráveis (com cache) ----
 
-    private fiscalRulesCache: { regras: any[]; opf: Map<string, string>; origem: Map<string, string> } | null = null;
+    private fiscalRulesCache: { regras: any[]; opf: Map<string, string>; origem: Map<string, string>; cfops: any[] } | null = null;
 
     private invalidateFiscalRules() {
         this.fiscalRulesCache = null;
@@ -2252,16 +2260,55 @@ export class IcmsService {
             const regras = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_regra WHERE ativo = true`);
             const opfRows = await this.prisma.$queryRawUnsafe<any[]>(`SELECT opf_codigo, destinacao FROM com_fiscal_opf_destinacao WHERE ativo = true`);
             const origemRows = await this.prisma.$queryRawUnsafe<any[]>(`SELECT origem_de, origem_para FROM com_fiscal_origem_cst WHERE ativo = true`);
+            let cfops: any[] = [];
+            try {
+                cfops = await this.prisma.$queryRawUnsafe<any[]>(
+                    `SELECT cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final FROM com_fiscal_cfop WHERE ativo = true`,
+                );
+            } catch { cfops = []; } // tabela ainda não criada
             this.fiscalRulesCache = {
                 regras: regras ?? [],
                 opf: new Map((opfRows ?? []).map((r) => [this.digitsOnly(r.opf_codigo), String(r.destinacao)])),
                 origem: new Map((origemRows ?? []).map((r) => [String(r.origem_de), String(r.origem_para)])),
+                cfops: cfops ?? [],
             };
         } catch {
             // Tabelas ainda não criadas → usa os defaults embutidos no código.
-            this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map() };
+            this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map(), cfops: [] };
         }
         return this.fiscalRulesCache;
+    }
+
+    /**
+     * CFOP de entrada + CST final esperados a partir do CFOP do fornecedor,
+     * destinação e se o produto é ST em MT (tem CEST). Match por especificidade
+     * (destinação/tem_cest exatos têm prioridade sobre QUALQUER). null = sem regra.
+     */
+    private cfopRegraEsperada(
+        rules: { cfops: any[] },
+        cfopFornecedor: string,
+        destinacao: string | null,
+        temCest: boolean,
+    ): { cfopEntrada: string; cstFinal: string | null } | null {
+        if (!cfopFornecedor) return null;
+        const dest = String(destinacao || '').toUpperCase();
+        const cest = temCest ? 'SIM' : 'NAO';
+        let best: any = null;
+        let bestScore = -1;
+        for (const r of rules.cfops ?? []) {
+            if (this.digitsOnly(r.cfop_fornecedor) !== cfopFornecedor) continue;
+            const rd = String(r.destinacao || 'QUALQUER').toUpperCase();
+            const rc = String(r.tem_cest || 'QUALQUER').toUpperCase();
+            if (rd !== 'QUALQUER' && rd !== dest) continue;
+            if (rc !== 'QUALQUER' && rc !== cest) continue;
+            const score = (rd !== 'QUALQUER' ? 2 : 0) + (rc !== 'QUALQUER' ? 1 : 0);
+            if (score > bestScore) { bestScore = score; best = r; }
+        }
+        if (!best) return null;
+        return {
+            cfopEntrada: this.digitsOnly(best.cfop_entrada),
+            cstFinal: best.cst_final ? this.digitsOnly(best.cst_final).slice(-2) : null,
+        };
     }
 
     /** Valores esperados (defaults embutidos), usados quando a tabela está vazia. */
@@ -2320,15 +2367,23 @@ export class IcmsService {
         const origem = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT id::int AS id, origem_de, origem_para, ativo FROM com_fiscal_origem_cst ORDER BY origem_de`,
         );
-        return { regras, opf, origem };
+        let cfops: any[] = [];
+        try {
+            cfops = await this.prisma.$queryRawUnsafe<any[]>(
+                `SELECT id::int AS id, cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final, ativo, descricao
+                 FROM com_fiscal_cfop ORDER BY cfop_fornecedor, destinacao, tem_cest`,
+            );
+        } catch { cfops = []; }
+        return { regras, opf, origem, cfops };
     }
 
     /** Substitui todas as regras (full replace, atômico) e invalida o cache. */
-    async saveFiscalRegras(body: { regras?: any[]; opf?: any[]; origem?: any[] }) {
+    async saveFiscalRegras(body: { regras?: any[]; opf?: any[]; origem?: any[]; cfops?: any[] }) {
         const ops: any[] = [
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_regra`),
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_opf_destinacao`),
             this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_origem_cst`),
+            this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_cfop`),
         ];
         const orNull = (v: any) => (v === undefined || v === '' ? null : v);
         for (const r of body.regras ?? []) {
@@ -2361,6 +2416,22 @@ export class IcmsService {
                 this.prisma.$executeRawUnsafe(
                     `INSERT INTO com_fiscal_origem_cst (origem_de, origem_para, ativo) VALUES ($1,$2,$3)`,
                     String(o.origem_de).trim(), String(o.origem_para || '').trim(), o.ativo !== false,
+                ),
+            );
+        }
+        for (const c of body.cfops ?? []) {
+            if (!String(c.cfop_fornecedor ?? '').trim() || !String(c.cfop_entrada ?? '').trim()) continue;
+            ops.push(
+                this.prisma.$executeRawUnsafe(
+                    `INSERT INTO com_fiscal_cfop (cfop_fornecedor, destinacao, tem_cest, cfop_entrada, cst_final, ativo, descricao)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+                    this.digitsOnly(c.cfop_fornecedor),
+                    String(c.destinacao || 'QUALQUER').toUpperCase(),
+                    String(c.tem_cest || 'QUALQUER').toUpperCase(),
+                    this.digitsOnly(c.cfop_entrada),
+                    orNull(c.cst_final ? this.digitsOnly(c.cst_final).slice(-2) : null),
+                    c.ativo !== false,
+                    orNull(c.descricao),
                 ),
             );
         }
@@ -2472,7 +2543,7 @@ export class IcmsService {
      * conferência marcada como ok/divergente, com código e descrição do produto.
      * Base única para persistir, alertar e exibir o detalhe. null = não auditável.
      */
-    private async computarAuditoria(chaveNfe: string): Promise<{
+    private async computarAuditoria(chaveNfe: string, opts: { produtoDireto?: boolean } = {}): Promise<{
         nota: any;
         header: any;
         semConferencia: boolean;
@@ -2548,7 +2619,7 @@ export class IcmsService {
                 const notaItem = notaByItem.get(nItem);
                 const cItem = confByItem.get(nItem);
                 const checks: Chk[] = [];
-                const prod = proCodigo ? await this.findInternalProduct(proCodigo) : null;
+                const prod = proCodigo ? await this.findInternalProduct(proCodigo, !!opts.produtoDireto) : null;
                 const descricao = prod?.PRO_DESCRICAO ?? null;
 
                 let imposto: string | null = null;
@@ -2570,14 +2641,21 @@ export class IcmsService {
 
                 const monofasico = this.isMonofasicoNcm(this.cleanDigits(notaItem?.ncm ?? ''));
                 const reg = this.regraEsperada(rules, imposto!, destinacao!, monofasico);
-                const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
+
+                // CFOP/CST esperados: 1º pelas regras por CFOP do fornecedor (norma MT,
+                // considerando se o produto tem CEST); fallback na matriz imposto×destinação.
+                const cfopNota = this.digitsOnly(ei.CFOP_NOTA);
+                const temCest = !!String(prod?.CEST ?? '').trim();
+                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, temCest);
+                const cfopExp = expCfop?.cfopEntrada ?? (reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null);
+                const cstFinalExp = expCfop?.cstFinal ?? reg.cstFinal;
 
                 if (cfopExp) {
                     checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
                 }
-                if (reg.cstFinal) {
+                if (cstFinalExp) {
                     const enc = cstFiscalLanc ? cstFiscalLanc.slice(-2) : '';
-                    checks.push({ campo: 'CST final', esperado: reg.cstFinal, encontrado: enc, ok: !enc || enc === reg.cstFinal });
+                    checks.push({ campo: 'CST final', esperado: cstFinalExp, encontrado: enc, ok: !enc || enc === cstFinalExp });
                 }
                 if (notaItem?.origemNota && cstFiscalLanc.length === 3) {
                     const origemExp = rules.origem.get(notaItem.origemNota) ?? this.origemEsperada(notaItem.origemNota);
@@ -2630,14 +2708,14 @@ export class IcmsService {
      * Audita o lançamento de uma NF que virou LANCADA: persiste o resultado e,
      * havendo erro, alerta o grupo via n8n/WAHA. Nunca lança; alerta 1x por NF.
      */
-    private async auditarLancamentoFiscal(chaveNfe: string, opts: { enviarAlerta?: boolean } = {}): Promise<void> {
+    private async auditarLancamentoFiscal(chaveNfe: string, opts: { enviarAlerta?: boolean; produtoDireto?: boolean } = {}): Promise<void> {
         const enviarAlerta = opts.enviarAlerta !== false;
         try {
             const nfeRow: any = await this.prisma.nfeConciliacao.findUnique({
                 where: { chave_nfe: chaveNfe },
                 select: { auditoria_alerta_em: true },
             });
-            const r = await this.computarAuditoria(chaveNfe);
+            const r = await this.computarAuditoria(chaveNfe, { produtoDireto: opts.produtoDireto });
             if (!r) return;
 
             const erros = this.errosFromComputado(r);
@@ -2713,7 +2791,7 @@ export class IcmsService {
     }
 
     /** Monta o WHERE + params dos filtros da aba (reuso lista/lote). */
-    private buildAuditoriaFiltro(f: { q?: string; emitente?: string; escopo?: string; dtInicio?: string; dtFim?: string }): { where: string; params: any[] } {
+    private buildAuditoriaFiltro(f: { q?: string; emitente?: string; escopo?: string; status?: string; dtInicio?: string; dtFim?: string }): { where: string; params: any[] } {
         const { inicio, fim } = this.resolveJanelaEntrada(f.dtInicio, f.dtFim);
         const params: any[] = [];
         const cond: string[] = [`c.status_erp = 'LANCADA'`];
@@ -2732,11 +2810,18 @@ export class IcmsService {
         const esc = String(f.escopo || 'TODOS').toUpperCase();
         if (esc === 'DENTRO') cond.push(`left(c.chave_nfe, 2) = '51'`);
         else if (esc === 'FORA') cond.push(`left(c.chave_nfe, 2) <> '51'`);
+
+        const st = String(f.status || 'TODOS').toUpperCase();
+        if (st === 'PENDENTE') cond.push(`c.auditoria_fiscal_status IS NULL`);
+        else if (st === 'OK' || st === 'DIVERGENTE' || st === 'SEM_CONFERENCIA') {
+            params.push(st);
+            cond.push(`c.auditoria_fiscal_status = $${params.length}`);
+        }
         return { where: cond.join(' AND '), params };
     }
 
     /** Reexecuta a auditoria de TODAS as NFs do período filtrado (sem WhatsApp). */
-    async reconferirPeriodo(f: { q?: string; emitente?: string; escopo?: string; dtInicio?: string; dtFim?: string }) {
+    async reconferirPeriodo(f: { q?: string; emitente?: string; escopo?: string; status?: string; dtInicio?: string; dtFim?: string }) {
         const { where, params } = this.buildAuditoriaFiltro(f);
         const chaveRows = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT c.chave_nfe FROM com_nfe_conciliacao c WHERE ${where}
@@ -2745,7 +2830,7 @@ export class IcmsService {
         );
         const chaves = chaveRows.map((r) => r.chave_nfe);
         for (const chave of chaves) {
-            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false });
+            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false, produtoDireto: true });
         }
         const sumRows = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT auditoria_fiscal_status AS s, count(*)::int AS c
@@ -2762,7 +2847,7 @@ export class IcmsService {
 
     /** Lista NFs lançadas com o status da auditoria, para a aba Conferência Fiscal. */
     async listAuditorias(f: {
-        q?: string; emitente?: string; escopo?: string;
+        q?: string; emitente?: string; escopo?: string; status?: string;
         dtInicio?: string; dtFim?: string; page?: string | number; pageSize?: string | number;
     }) {
         const { where, params } = this.buildAuditoriaFiltro(f);
@@ -2810,7 +2895,7 @@ export class IcmsService {
 
     /** Detalhe de uma NF: cabeçalho + itens (código/descrição), com cada
      *  conferência marcada como ok/divergente. Calculado ao vivo. */
-    async getAuditoriaDetalhe(chaveNfe: string) {
+    async getAuditoriaDetalhe(chaveNfe: string, direto = false) {
         const rows = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
                     auditoria_fiscal_status, auditoria_fiscal_em,
@@ -2821,7 +2906,7 @@ export class IcmsService {
         const b = rows[0];
         if (!b) return null;
 
-        const r = await this.computarAuditoria(chaveNfe);
+        const r = await this.computarAuditoria(chaveNfe, { produtoDireto: direto });
 
         const baseHeader = {
             chaveNfe: b.chave_nfe,
@@ -2867,8 +2952,9 @@ export class IcmsService {
 
     /** Reexecuta a auditoria manualmente (sem disparar o WhatsApp) e devolve o detalhe. */
     async reconferirAuditoria(chaveNfe: string) {
-        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
-        return this.getAuditoriaDetalhe(chaveNfe);
+        // Reconferência: cadastro direto do ERP (sem esperar o ETL do Stage).
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
+        return this.getAuditoriaDetalhe(chaveNfe, true);
     }
 
     async savePaymentStatus(dto: {

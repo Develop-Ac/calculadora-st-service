@@ -86,7 +86,7 @@ export declare class IcmsController {
     persistFiscalConference(body: FiscalConferenceRequestDto): Promise<{
         notas: any[];
     }>;
-    listAuditoria(q?: string, emitente?: string, escopo?: string, dtInicio?: string, dtFim?: string, page?: string, pageSize?: string): Promise<{
+    listAuditoria(q?: string, emitente?: string, escopo?: string, status?: string, dtInicio?: string, dtFim?: string, page?: string, pageSize?: string): Promise<{
         page: number;
         pageSize: number;
         total: any;
@@ -105,7 +105,7 @@ export declare class IcmsController {
             totalErros: any;
         }[];
     }>;
-    reconferirPeriodo(q?: string, emitente?: string, escopo?: string, dtInicio?: string, dtFim?: string): Promise<{
+    reconferirPeriodo(q?: string, emitente?: string, escopo?: string, status?: string, dtInicio?: string, dtFim?: string): Promise<{
         total: number;
         ok: number;
         divergente: number;
@@ -236,6 +236,7 @@ export declare class IcmsController {
         regras: any[];
         opf: any[];
         origem: any[];
+        cfops: any[];
     }>;
     saveFiscalRegras(body: {
         regras?: any[];
@@ -245,6 +246,7 @@ export declare class IcmsController {
         regras: any[];
         opf: any[];
         origem: any[];
+        cfops: any[];
     }>;
     getPaymentStatus(): Promise<Record<string, {
         status: string;
