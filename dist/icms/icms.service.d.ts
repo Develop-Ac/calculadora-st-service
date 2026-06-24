@@ -182,7 +182,6 @@ export declare class IcmsService {
         total: number;
         ok: number;
         divergente: number;
-        semConferencia: number;
     }>;
     listAuditorias(f: {
         q?: string;

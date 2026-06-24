@@ -109,7 +109,6 @@ export declare class IcmsController {
         total: number;
         ok: number;
         divergente: number;
-        semConferencia: number;
     }>;
     getAuditoria(chaveNfe: string): Promise<{
         header: {

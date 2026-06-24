@@ -1529,22 +1529,15 @@ export class IcmsService {
             }
         }
 
-        if (produtoInterno && item.impostoEscolhido === 'ST') {
+        if (produtoInterno) {
+            // Situação Tributária: produto com CEST -> ST0-X (substituto); sem CEST -> TR0-X.
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
-            if (stCodigo !== 'ST0-X') {
-                divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
+            const temCest = !!String(produtoInterno.CEST ?? '').trim();
+            const stEsperado = temCest ? 'ST0-X' : 'TR0-X';
+            if (stCodigo !== stEsperado) {
+                divergencias.push(`Situação Tributária inválida: produto ${temCest ? 'com' : 'sem'} CEST exige ST_CODIGO=${stEsperado} e encontrado ${stCodigo || 'vazio'}.`);
             } else {
-                conformidades.push('ST_CODIGO correto para item com ICMS ST: ST0-X.');
-            }
-        }
-
-        if (produtoInterno && item.impostoEscolhido === 'TRIBUTADA') {
-            const stCodigoTributada = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
-
-            if (stCodigoTributada !== 'TR0-X') {
-                divergencias.push(`Situação tributária inválida para item Tributado: esperado ST_CODIGO=TR0-X e encontrado ${stCodigoTributada || 'vazio'}.`);
-            } else {
-                conformidades.push('Situação tributária correta para item Tributado: ST_CODIGO=TR0-X.');
+                conformidades.push(`Situação Tributária correta: ${stEsperado} (${temCest ? 'com' : 'sem'} CEST).`);
             }
         }
 
@@ -1868,7 +1861,8 @@ export class IcmsService {
                 PIS_CODIGO,
                 COFINS_CODIGO,
                 COMERCIALIZAVEL,
-                SUBGRP_CODIGO
+                SUBGRP_CODIGO,
+                CEST
             FROM [BI].[dbo].[Stage_Produtos]
             WHERE PRO_CODIGO = @proCodigo
             `,
@@ -1890,7 +1884,7 @@ export class IcmsService {
         const firebirdSql = `
       SELECT FIRST 1
           PRO_CODIGO, PRO_DESCRICAO, ST_CODIGO, SUBTIPO,
-          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO
+          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO, CEST
       FROM PRODUTOS
       WHERE EMPRESA = 1 AND PRO_CODIGO = ${code}
     `;
@@ -2595,8 +2589,10 @@ export class IcmsService {
                 } else if (prod) {
                     // PIS/COFINS vêm do SUBTIPO do cadastro (07/08->P70/C70, mono->04, senão P01/C01).
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
+                    // Situação Tributária: produto com CEST -> ST0-X (substituto); sem CEST -> TR0-X.
+                    const stEsperado = String(prod.CEST ?? '').trim() ? 'ST0-X' : 'TR0-X';
                     const cad: Array<[string, any, any]> = [
-                        ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
+                        ['Cadastro ST_CODIGO', stEsperado, prod.ST_CODIGO],
                         ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],
                         ['Cadastro COFINS', pc.cofins, prod.COFINS_CODIGO],
                         ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
@@ -2645,7 +2641,7 @@ export class IcmsService {
             if (!r) return;
 
             const erros = this.errosFromComputado(r);
-            const status = r.semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
+            const status = erros.length > 0 ? 'DIVERGENTE' : 'OK';
 
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
@@ -2761,7 +2757,6 @@ export class IcmsService {
             total: chaves.length,
             ok: by('OK'),
             divergente: by('DIVERGENTE'),
-            semConferencia: by('SEM_CONFERENCIA'),
         };
     }
 
@@ -2853,7 +2848,7 @@ export class IcmsService {
 
         const contaErros = (cks: any[]) => cks.filter((c) => !c.ok).length;
         const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
-        const status = r.semConferencia ? 'SEM_CONFERENCIA' : totalErros > 0 ? 'DIVERGENTE' : 'OK';
+        const status = totalErros > 0 ? 'DIVERGENTE' : 'OK';
 
         return {
             header: { ...baseHeader, status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false },

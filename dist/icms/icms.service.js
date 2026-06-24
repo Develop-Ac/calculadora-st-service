@@ -1221,6 +1221,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return { notas: result };
     }
     async analyzeFiscalItem(input) {
+        var _a;
         const { emitenteCnpj, isCompraDentroEstado, item } = input;
         const destinacaoMercadoria = item.destinacaoMercadoria;
         const codProdFornecedorRaw = String(item.codProdFornecedor || '').trim();
@@ -1268,22 +1269,15 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 divergencias.push('PRO_CODIGO vinculado não encontrado na Stage_Produtos.');
             }
         }
-        if (produtoInterno && item.impostoEscolhido === 'ST') {
+        if (produtoInterno) {
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
-            if (stCodigo !== 'ST0-X') {
-                divergencias.push(`ST_CODIGO inválido para item com ICMS ST: esperado ST0-X e encontrado ${stCodigo || 'vazio'}.`);
+            const temCest = !!String((_a = produtoInterno.CEST) !== null && _a !== void 0 ? _a : '').trim();
+            const stEsperado = temCest ? 'ST0-X' : 'TR0-X';
+            if (stCodigo !== stEsperado) {
+                divergencias.push(`Situação Tributária inválida: produto ${temCest ? 'com' : 'sem'} CEST exige ST_CODIGO=${stEsperado} e encontrado ${stCodigo || 'vazio'}.`);
             }
             else {
-                conformidades.push('ST_CODIGO correto para item com ICMS ST: ST0-X.');
-            }
-        }
-        if (produtoInterno && item.impostoEscolhido === 'TRIBUTADA') {
-            const stCodigoTributada = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
-            if (stCodigoTributada !== 'TR0-X') {
-                divergencias.push(`Situação tributária inválida para item Tributado: esperado ST_CODIGO=TR0-X e encontrado ${stCodigoTributada || 'vazio'}.`);
-            }
-            else {
-                conformidades.push('Situação tributária correta para item Tributado: ST_CODIGO=TR0-X.');
+                conformidades.push(`Situação Tributária correta: ${stEsperado} (${temCest ? 'com' : 'sem'} CEST).`);
             }
         }
         const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
@@ -1552,7 +1546,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 PIS_CODIGO,
                 COFINS_CODIGO,
                 COMERCIALIZAVEL,
-                SUBGRP_CODIGO
+                SUBGRP_CODIGO,
+                CEST
             FROM [BI].[dbo].[Stage_Produtos]
             WHERE PRO_CODIGO = @proCodigo
             `, { proCodigo }, { allowZeroRows: true });
@@ -1568,7 +1563,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const firebirdSql = `
       SELECT FIRST 1
           PRO_CODIGO, PRO_DESCRICAO, ST_CODIGO, SUBTIPO,
-          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO
+          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO, CEST
       FROM PRODUTOS
       WHERE EMPRESA = 1 AND PRO_CODIGO = ${code}
     `;
@@ -2012,7 +2007,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return { header, itens };
     }
     async computarAuditoria(chaveNfe) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f;
         const nfeRow = await this.prisma.nfeConciliacao.findUnique({
             where: { chave_nfe: chaveNfe },
             select: { xml_completo: true },
@@ -2111,8 +2106,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 }
                 else if (prod) {
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
+                    const stEsperado = String((_f = prod.CEST) !== null && _f !== void 0 ? _f : '').trim() ? 'ST0-X' : 'TR0-X';
                     const cad = [
-                        ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
+                        ['Cadastro ST_CODIGO', stEsperado, prod.ST_CODIGO],
                         ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],
                         ['Cadastro COFINS', pc.cofins, prod.COFINS_CODIGO],
                         ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
@@ -2158,7 +2154,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             if (!r)
                 return;
             const erros = this.errosFromComputado(r);
-            const status = r.semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
+            const status = erros.length > 0 ? 'DIVERGENTE' : 'OK';
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
                 data: { auditoria_fiscal_em: new Date(), auditoria_fiscal_status: status },
@@ -2256,7 +2252,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
             total: chaves.length,
             ok: by('OK'),
             divergente: by('DIVERGENTE'),
-            semConferencia: by('SEM_CONFERENCIA'),
         };
     }
     async listAuditorias(f) {
@@ -2329,7 +2324,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         const contaErros = (cks) => cks.filter((c) => !c.ok).length;
         const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
-        const status = r.semConferencia ? 'SEM_CONFERENCIA' : totalErros > 0 ? 'DIVERGENTE' : 'OK';
+        const status = totalErros > 0 ? 'DIVERGENTE' : 'OK';
         return {
             header: Object.assign(Object.assign({}, baseHeader), { status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false }),
             cabecalho: r.cabecalho,
