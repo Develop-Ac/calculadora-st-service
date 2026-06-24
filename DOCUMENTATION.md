@@ -189,3 +189,91 @@ Saída:
 ### Observação operacional
 
 O endpoint `POST /icms/payment-status` passou a aceitar a coleção de itens para, além do status da nota, persistir a conferência fiscal por item quando a estrutura SQL já estiver aplicada.
+
+## Alerta de MVA acima do padrão — NF interestadual (junho/2026)
+
+Automação que, ao chegar o **XML completo** de uma NF de entrada **de fora de MT**,
+verifica o MVA destacado e, se exceder o padrão, avisa a equipe pelo WhatsApp
+(grupo **Conferência Fiscal**) via um workflow do n8n.
+
+### Fluxo
+
+```
+ERP --(sync 1min)--> syncInvoices() --(transição p/ XML completo)--> maybeAlertMva()
+   --(regra atende)--> POST N8N_MVA_WEBHOOK_URL --> n8n (workflow Alerta_MVA_NF_Compra)
+   --> HTTP WAHA /api/sendText --> grupo "Conferência Fiscal"
+```
+
+A intranet toma toda a **decisão** (reusa o parser de XML já existente) e o n8n
+apenas **formata e envia** a mensagem, reaproveitando a sessão WhatsApp (`default`)
+já usada por outros fluxos.
+
+### Regra
+
+* NF de **fora do estado**: os 2 primeiros dígitos da chave ≠ `51` (MT).
+* **Algum item** com `pMVAST` destacado **> 50,39%** (limiar = MVA-padrão/fallback do serviço).
+* O alerta lista todos os itens que excederam o limiar.
+
+### Estrutura de banco (PostgreSQL)
+
+Aplicar manualmente o script:
+
+`sql/2026-06-24_alerta_mva_nf_interestadual.sql`
+
+Adiciona em `com_nfe_conciliacao` as colunas de controle:
+
+* `mva_verificado_em` — regra já avaliada para a NF (evita reprocessar a cada minuto).
+* `mva_alerta_enviado_em` — WhatsApp já disparado (anti-duplicidade).
+* `mva_maior` — maior `pMVAST` encontrado na nota (auditoria).
+
+Após aplicar, rodar `npx prisma generate` (as colunas já estão em `prisma/schema.prisma`).
+
+### Variável de ambiente
+
+```env
+# Webhook do n8n (workflow Alerta_MVA_NF_Compra) que envia o WhatsApp via WAHA.
+# Sem isso, o alerta é pulado (apenas warning no log).
+N8N_MVA_WEBHOOK_URL=https://atendimento-n8n.naayqg.easypanel.host/webhook/mva-alerta
+```
+
+### Implementação
+
+* `icms.service.ts`:
+  * `maybeAlertMva(chaveNfe, xmlCompleto)` — chamada no loop de upsert do `syncInvoices()`
+    quando há `normalizedXmlCompleto`. Idempotente (colunas acima) e **tolerante a falha**
+    (envolvida em try/catch — nunca quebra o sync; o alerta só é marcado como enviado em
+    resposta HTTP 2xx, então falha de rede é reprocessada no próximo ciclo).
+  * `extractMvaFromXml(xml)` — extrai cabeçalho (emitente, UF, nº, valor) e o `pMVAST`
+    por item, reaproveitando o mesmo padrão de parse de `calculateStForInvoice()`.
+  * Constante `MVA_LIMIAR = 50.39`.
+
+### Contrato do webhook (intranet → n8n)
+
+```json
+{
+  "chaveNfe": "...",
+  "numeroNf": "1234",
+  "emitente": "FORNECEDOR XPTO LTDA",
+  "cnpjEmitente": "12345678000190",
+  "ufEmitente": "SP",
+  "dataEmissao": "2026-06-24T10:32:00-04:00",
+  "valorTotal": 18450.77,
+  "mvaPadrao": 50.39,
+  "maiorMva": 62.5,
+  "qtdItensAcima": 2,
+  "itensAcima": [
+    { "nItem": 1, "cProd": "ABC123", "descricao": "PASTILHA FREIO", "ncm": "87083090", "cfop": "6403", "pMvaSt": 62.5 }
+  ]
+}
+```
+
+### n8n / WhatsApp
+
+* Workflow **`Alerta_MVA_NF_Compra`** (n8n online EasyPanel), nós:
+  `Webhook MVA → Montar mensagem → Enviar WhatsApp (WAHA) → Responder 200`.
+* Envio: `POST https://atendimento-waha.naayqg.easypanel.host/api/sendText`
+  (header `X-Api-Key`, body `{ session: "default", chatId, text }`).
+* Grupo de destino **Conferência Fiscal**: `chatId = 120363410637434985@g.us`.
+* Para testar sem o ERP: `POST` do contrato acima no webhook de produção
+  (`/webhook/mva-alerta`). O caminho `/webhook-test/...` só funciona com o editor
+  do n8n em modo "Listen for test event".
