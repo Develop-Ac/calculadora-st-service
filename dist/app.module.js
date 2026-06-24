@@ -9,6 +9,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AppModule = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
+const schedule_1 = require("@nestjs/schedule");
 const icms_module_1 = require("./icms/icms.module");
 const prisma_module_1 = require("./prisma/prisma.module");
 const openquery_module_1 = require("./shared/database/openquery/openquery.module");
@@ -19,6 +20,7 @@ exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [
             config_1.ConfigModule.forRoot({ isGlobal: true }),
+            schedule_1.ScheduleModule.forRoot(),
             prisma_module_1.PrismaModule,
             openquery_module_1.OpenQueryModule,
             icms_module_1.IcmsModule,

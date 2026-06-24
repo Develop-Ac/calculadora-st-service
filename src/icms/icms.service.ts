@@ -133,6 +133,13 @@ export class IcmsService {
                             updated_at: new Date()
                         }
                     });
+
+                    // Só quando o XML COMPLETO chega (resumo não traz itens/MVA),
+                    // avalia a regra de MVA e dispara o alerta de WhatsApp (n8n).
+                    // Idempotente e tolerante a falha: nunca quebra o sync.
+                    if (normalizedXmlCompleto) {
+                        await this.maybeAlertMva(inv.CHAVE_NFE, normalizedXmlCompleto);
+                    }
                 });
             }
 
@@ -1947,6 +1954,181 @@ export class IcmsService {
     private isWithinMtByChave(chaveNfe: string) {
         const chave = String(chaveNfe || '').trim();
         return chave.slice(0, 2) === '51';
+    }
+
+    // Limiar de MVA a partir do qual a NF interestadual é sinalizada para a
+    // Conferência Fiscal. 50,39% é o MVA-padrão (fallback) usado nos cálculos.
+    private static readonly MVA_LIMIAR = 50.39;
+
+    /**
+     * Avalia a regra de MVA para uma NF que acabou de receber XML COMPLETO e,
+     * se cabível, dispara o webhook do n8n (que envia o WhatsApp via WAHA).
+     *
+     * Regra: NF de FORA do estado (chave não inicia com 51) em que ALGUM item
+     * tenha pMVAST destacado > 50,39%.
+     *
+     * Idempotência: usa as colunas mva_verificado_em / mva_alerta_enviado_em.
+     * O alerta só é marcado como enviado em resposta 2xx do n8n — assim uma
+     * falha de rede é reprocessada no próximo ciclo do sync. Nunca lança.
+     */
+    private async maybeAlertMva(chaveNfe: string, xmlCompleto: string): Promise<void> {
+        try {
+            const row = await this.prisma.nfeConciliacao.findUnique({
+                where: { chave_nfe: chaveNfe },
+                select: { mva_alerta_enviado_em: true },
+            });
+            // Já alertado: nada a fazer.
+            if (row?.mva_alerta_enviado_em) return;
+
+            // Dentro de MT (intraestadual): não se aplica. Marca como verificado
+            // para não reprocessar a cada minuto.
+            if (this.isWithinMtByChave(chaveNfe)) {
+                await this.prisma.nfeConciliacao.update({
+                    where: { chave_nfe: chaveNfe },
+                    data: { mva_verificado_em: new Date() },
+                });
+                return;
+            }
+
+            const parsed = await this.extractMvaFromXml(xmlCompleto);
+            if (!parsed) return; // XML não-completo/ilegível: tenta de novo depois.
+
+            const itensAcima = parsed.itens.filter(
+                (i) => i.pMvaSt > IcmsService.MVA_LIMIAR,
+            );
+            const maiorMva = parsed.itens.reduce((m, i) => Math.max(m, i.pMvaSt), 0);
+
+            // Verificado: guarda o maior MVA da nota para auditoria.
+            await this.prisma.nfeConciliacao.update({
+                where: { chave_nfe: chaveNfe },
+                data: { mva_verificado_em: new Date(), mva_maior: maiorMva },
+            });
+
+            if (itensAcima.length === 0) return; // Nada acima do limiar.
+
+            const webhook = process.env.N8N_MVA_WEBHOOK_URL;
+            if (!webhook) {
+                this.logger.warn(
+                    'N8N_MVA_WEBHOOK_URL não configurada: pulando alerta de MVA.',
+                    'MVA',
+                );
+                return;
+            }
+
+            const payload = {
+                chaveNfe,
+                numeroNf: parsed.numeroNf,
+                emitente: parsed.emitente,
+                cnpjEmitente: parsed.cnpjEmitente,
+                ufEmitente: parsed.ufEmitente,
+                dataEmissao: parsed.dataEmissao,
+                valorTotal: parsed.valorTotal,
+                mvaPadrao: IcmsService.MVA_LIMIAR,
+                maiorMva,
+                qtdItensAcima: itensAcima.length,
+                itensAcima,
+            };
+
+            const resp = await fetch(webhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (resp.ok) {
+                await this.prisma.nfeConciliacao.update({
+                    where: { chave_nfe: chaveNfe },
+                    data: { mva_alerta_enviado_em: new Date() },
+                });
+                this.logger.log(
+                    `Alerta de MVA enviado para ${chaveNfe} (${itensAcima.length} item(s), maior ${maiorMva}%).`,
+                    'MVA',
+                );
+            } else {
+                this.logger.error(
+                    `n8n recusou alerta de MVA ${chaveNfe}: HTTP ${resp.status}. Será reprocessado.`,
+                    undefined,
+                    'MVA',
+                );
+            }
+        } catch (e) {
+            // Nunca pode quebrar o sync.
+            this.logger.error(
+                `Falha ao avaliar/enviar alerta de MVA para ${chaveNfe}`,
+                e instanceof Error ? e.stack : String(e),
+                'MVA',
+            );
+        }
+    }
+
+    /**
+     * Extrai cabeçalho + pMVAST por item de um XML de NFe completo.
+     * Reaproveita o mesmo padrão de parsing de calculateStForInvoice().
+     * Retorna null se o XML não tiver itens (resumo) ou for ilegível.
+     */
+    private async extractMvaFromXml(xmlContent: string): Promise<{
+        numeroNf: string | null;
+        emitente: string | null;
+        cnpjEmitente: string | null;
+        ufEmitente: string | null;
+        dataEmissao: string | null;
+        valorTotal: number;
+        itens: Array<{
+            nItem: number;
+            cProd: string | null;
+            descricao: string | null;
+            ncm: string | null;
+            cfop: string | null;
+            pMvaSt: number;
+        }>;
+    } | null> {
+        const xmlStr = await this.decodeXml(xmlContent);
+        if (!xmlStr) return null;
+
+        const parser = new xml2js.Parser({ explicitArray: false });
+        const result = await parser.parseStringPromise(xmlStr);
+
+        const nfe = result.nfeProc ? result.nfeProc.NFe : result.NFe;
+        if (!nfe || !nfe.infNFe) return null;
+
+        const infNfe = nfe.infNFe;
+        if (!infNfe.det) return null; // Sem itens => resumo.
+
+        const emit = infNfe.emit || {};
+        const ide = infNfe.ide || {};
+        const icmsTot = infNfe.total?.ICMSTot || {};
+        const det = Array.isArray(infNfe.det) ? infNfe.det : [infNfe.det];
+
+        const itens = det.map((item: any, idx: number) => {
+            const prod = item.prod || {};
+            const imposto = item.imposto || {};
+            let pMvaSt = 0;
+            for (const key of Object.keys(imposto.ICMS || {})) {
+                const vals = imposto.ICMS[key] || {};
+                if (vals.pMVAST != null) {
+                    pMvaSt = parseFloat(vals.pMVAST) || 0;
+                }
+            }
+            const nItem = parseInt(item['$']?.nItem ?? '', 10);
+            return {
+                nItem: Number.isFinite(nItem) ? nItem : idx + 1,
+                cProd: prod.cProd ?? null,
+                descricao: prod.xProd ?? null,
+                ncm: prod.NCM ?? null,
+                cfop: prod.CFOP ?? null,
+                pMvaSt,
+            };
+        });
+
+        return {
+            numeroNf: ide.nNF ?? null,
+            emitente: emit.xNome ?? null,
+            cnpjEmitente: emit.CNPJ ?? emit.CPF ?? null,
+            ufEmitente: emit.enderEmit?.UF ?? null,
+            dataEmissao: ide.dhEmi ?? ide.dEmi ?? null,
+            valorTotal: parseFloat(icmsTot.vNF || 0) || 0,
+            itens,
+        };
     }
 
     async savePaymentStatus(dto: {

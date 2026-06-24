@@ -39,6 +39,11 @@ model NfeConciliacao {
   tipo_operacao_desc  String @default("ENTRADA PRÓPRIA")
   tipo_imposto        String?
 
+  // Alerta de MVA acima do padrão (NF interestadual) — ver maybeAlertMva()
+  mva_verificado_em     DateTime?         // regra de MVA já avaliada para esta NF
+  mva_alerta_enviado_em DateTime?         // WhatsApp já disparado (anti-duplicidade)
+  mva_maior             Float?            // maior pMVAST encontrado na nota
+
   updated_at     DateTime @updatedAt
   created_at     DateTime @default(now())
 

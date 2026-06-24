@@ -133,6 +133,9 @@ export declare class IcmsService {
     private isOnlyNoRelationshipStatus;
     private getConferenceStatusFromRows;
     private isWithinMtByChave;
+    private static readonly MVA_LIMIAR;
+    private maybeAlertMva;
+    private extractMvaFromXml;
     savePaymentStatus(dto: {
         chaveNfe: string;
         valor?: number;

@@ -122,6 +122,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
                         },
                         update: Object.assign(Object.assign({ status_erp: 'PENDENTE' }, (normalizedXmlCompleto ? { xml_completo: this.encodeXml(normalizedXmlCompleto) } : {})), { updated_at: new Date() })
                     });
+                    if (normalizedXmlCompleto) {
+                        await this.maybeAlertMva(inv.CHAVE_NFE, normalizedXmlCompleto);
+                    }
                 });
             }
             const upsertBatchSize = 20;
@@ -1632,6 +1635,118 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const chave = String(chaveNfe || '').trim();
         return chave.slice(0, 2) === '51';
     }
+    async maybeAlertMva(chaveNfe, xmlCompleto) {
+        try {
+            const row = await this.prisma.nfeConciliacao.findUnique({
+                where: { chave_nfe: chaveNfe },
+                select: { mva_alerta_enviado_em: true },
+            });
+            if (row === null || row === void 0 ? void 0 : row.mva_alerta_enviado_em)
+                return;
+            if (this.isWithinMtByChave(chaveNfe)) {
+                await this.prisma.nfeConciliacao.update({
+                    where: { chave_nfe: chaveNfe },
+                    data: { mva_verificado_em: new Date() },
+                });
+                return;
+            }
+            const parsed = await this.extractMvaFromXml(xmlCompleto);
+            if (!parsed)
+                return;
+            const itensAcima = parsed.itens.filter((i) => i.pMvaSt > IcmsService_1.MVA_LIMIAR);
+            const maiorMva = parsed.itens.reduce((m, i) => Math.max(m, i.pMvaSt), 0);
+            await this.prisma.nfeConciliacao.update({
+                where: { chave_nfe: chaveNfe },
+                data: { mva_verificado_em: new Date(), mva_maior: maiorMva },
+            });
+            if (itensAcima.length === 0)
+                return;
+            const webhook = process.env.N8N_MVA_WEBHOOK_URL;
+            if (!webhook) {
+                this.logger.warn('N8N_MVA_WEBHOOK_URL não configurada: pulando alerta de MVA.', 'MVA');
+                return;
+            }
+            const payload = {
+                chaveNfe,
+                numeroNf: parsed.numeroNf,
+                emitente: parsed.emitente,
+                cnpjEmitente: parsed.cnpjEmitente,
+                ufEmitente: parsed.ufEmitente,
+                dataEmissao: parsed.dataEmissao,
+                valorTotal: parsed.valorTotal,
+                mvaPadrao: IcmsService_1.MVA_LIMIAR,
+                maiorMva,
+                qtdItensAcima: itensAcima.length,
+                itensAcima,
+            };
+            const resp = await fetch(webhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (resp.ok) {
+                await this.prisma.nfeConciliacao.update({
+                    where: { chave_nfe: chaveNfe },
+                    data: { mva_alerta_enviado_em: new Date() },
+                });
+                this.logger.log(`Alerta de MVA enviado para ${chaveNfe} (${itensAcima.length} item(s), maior ${maiorMva}%).`, 'MVA');
+            }
+            else {
+                this.logger.error(`n8n recusou alerta de MVA ${chaveNfe}: HTTP ${resp.status}. Será reprocessado.`, undefined, 'MVA');
+            }
+        }
+        catch (e) {
+            this.logger.error(`Falha ao avaliar/enviar alerta de MVA para ${chaveNfe}`, e instanceof Error ? e.stack : String(e), 'MVA');
+        }
+    }
+    async extractMvaFromXml(xmlContent) {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        const xmlStr = await this.decodeXml(xmlContent);
+        if (!xmlStr)
+            return null;
+        const parser = new xml2js.Parser({ explicitArray: false });
+        const result = await parser.parseStringPromise(xmlStr);
+        const nfe = result.nfeProc ? result.nfeProc.NFe : result.NFe;
+        if (!nfe || !nfe.infNFe)
+            return null;
+        const infNfe = nfe.infNFe;
+        if (!infNfe.det)
+            return null;
+        const emit = infNfe.emit || {};
+        const ide = infNfe.ide || {};
+        const icmsTot = ((_a = infNfe.total) === null || _a === void 0 ? void 0 : _a.ICMSTot) || {};
+        const det = Array.isArray(infNfe.det) ? infNfe.det : [infNfe.det];
+        const itens = det.map((item, idx) => {
+            var _a, _b, _c, _d, _e, _f;
+            const prod = item.prod || {};
+            const imposto = item.imposto || {};
+            let pMvaSt = 0;
+            for (const key of Object.keys(imposto.ICMS || {})) {
+                const vals = imposto.ICMS[key] || {};
+                if (vals.pMVAST != null) {
+                    pMvaSt = parseFloat(vals.pMVAST) || 0;
+                }
+            }
+            const nItem = parseInt((_b = (_a = item['$']) === null || _a === void 0 ? void 0 : _a.nItem) !== null && _b !== void 0 ? _b : '', 10);
+            return {
+                nItem: Number.isFinite(nItem) ? nItem : idx + 1,
+                cProd: (_c = prod.cProd) !== null && _c !== void 0 ? _c : null,
+                descricao: (_d = prod.xProd) !== null && _d !== void 0 ? _d : null,
+                ncm: (_e = prod.NCM) !== null && _e !== void 0 ? _e : null,
+                cfop: (_f = prod.CFOP) !== null && _f !== void 0 ? _f : null,
+                pMvaSt,
+            };
+        });
+        return {
+            numeroNf: (_b = ide.nNF) !== null && _b !== void 0 ? _b : null,
+            emitente: (_c = emit.xNome) !== null && _c !== void 0 ? _c : null,
+            cnpjEmitente: (_e = (_d = emit.CNPJ) !== null && _d !== void 0 ? _d : emit.CPF) !== null && _e !== void 0 ? _e : null,
+            ufEmitente: (_g = (_f = emit.enderEmit) === null || _f === void 0 ? void 0 : _f.UF) !== null && _g !== void 0 ? _g : null,
+            dataEmissao: (_j = (_h = ide.dhEmi) !== null && _h !== void 0 ? _h : ide.dEmi) !== null && _j !== void 0 ? _j : null,
+            valorTotal: parseFloat(icmsTot.vNF || 0) || 0,
+            itens,
+        };
+    }
     async savePaymentStatus(dto) {
         let fiscalConference = null;
         if (Array.isArray(dto.itens) && dto.itens.length > 0) {
@@ -2043,6 +2158,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
     }
 };
 exports.IcmsService = IcmsService;
+IcmsService.MVA_LIMIAR = 50.39;
 exports.IcmsService = IcmsService = IcmsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [openquery_service_1.OpenQueryService,
