@@ -2429,160 +2429,176 @@ export class IcmsService {
     }
 
     /**
-     * Audita o lançamento fiscal de uma NF que acabou de virar LANCADA:
-     * cruza a nota (XML), a conferência da tela e o lançamento no ERP.
-     * Persiste o resultado e, havendo erro, alerta o grupo via n8n/WAHA.
-     * Nunca lança (try/catch); alerta no máximo 1x por NF.
+     * Computa a auditoria de uma NF (read-only): cabeçalho + itens, cada
+     * conferência marcada como ok/divergente, com código e descrição do produto.
+     * Base única para persistir, alertar e exibir o detalhe. null = não auditável.
+     */
+    private async computarAuditoria(chaveNfe: string): Promise<{
+        nota: any;
+        header: any;
+        semConferencia: boolean;
+        cabecalho: Array<{ campo: string; esperado: string | null; encontrado: string | null; ok: boolean; mensagem?: string }>;
+        itens: Array<{ nItem: number; proCodigo: string; descricao: string | null; imposto: string | null; destinacao: string | null; checks: Array<{ campo: string; esperado: string | null; encontrado: string | null; ok: boolean; mensagem?: string }> }>;
+    } | null> {
+        const nfeRow: any = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: chaveNfe },
+            select: { xml_completo: true },
+        });
+        if (!nfeRow) return null;
+
+        const xml = await this.normalizeBlobXml(nfeRow.xml_completo);
+        if (this.detectXmlType(xml) !== 'COMPLETO') return null;
+
+        const nota = await this.parseNotaParaAuditoria(xml);
+        if (!nota) return null;
+
+        const erp = await this.fetchLancamentoErp(chaveNfe);
+        if (!erp) return null;
+
+        const conf = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT n_item, pro_codigo, imposto_escolhido, destinacao_mercadoria
+             FROM com_nfe_conciliacao_item WHERE chave_nfe = $1`,
+            chaveNfe,
+        );
+        const confByItem = new Map<number, any>();
+        for (const c of conf) confByItem.set(Number(c.n_item), c);
+        const semConferencia = conf.length === 0;
+
+        const intra = this.isWithinMtByChave(chaveNfe);
+        const h = erp.header;
+
+        // ---- Cabeçalho ----
+        type Chk = { campo: string; esperado: string | null; encontrado: string | null; ok: boolean; mensagem?: string };
+        const cabecalho: Chk[] = [];
+        const addCab = (campo: string, esperado: any, encontrado: any, norm: (x: any) => string = (x) => String(x ?? '').trim()) => {
+            const ok = norm(esperado) === norm(encontrado);
+            cabecalho.push({ campo, esperado: String(esperado ?? ''), encontrado: String(encontrado ?? ''), ok, mensagem: ok ? undefined : `${campo} divergente` });
+        };
+        addCab('Número', nota.numero, h.NOTA_FISCAL, (x) => this.digitsOnly(x));
+        addCab('Série', nota.serie, h.SERIE, (x) => this.digitsOnly(x));
+        addCab('Modelo', nota.modelo, h.MODELO_NOTA, (x) => this.digitsOnly(x));
+        addCab('Chave', nota.chave, h.CHAVE_NFE, (x) => this.digitsOnly(x));
+        addCab('CNPJ emitente', this.digitsOnly(nota.cnpjEmitente), this.digitsOnly(h.CHAVE_NFE).slice(6, 20));
+        const dEmiNota = (nota.dataEmissao || '').slice(0, 10);
+        const dEmiErp = h.DT_EMISSAO ? new Date(h.DT_EMISSAO).toISOString().slice(0, 10) : '';
+        const emissaoOk = !(dEmiNota && dEmiErp && dEmiNota !== dEmiErp);
+        cabecalho.push({ campo: 'Emissão', esperado: dEmiNota, encontrado: dEmiErp, ok: emissaoOk, mensagem: emissaoOk ? undefined : 'Data de emissão divergente' });
+        const valorOk = Math.abs((Number(h.TOTAL_NOTA) || 0) - nota.valorTotal) <= 0.01;
+        cabecalho.push({ campo: 'Valor total', esperado: nota.valorTotal.toFixed(2), encontrado: Number(h.TOTAL_NOTA || 0).toFixed(2), ok: valorOk, mensagem: valorOk ? undefined : 'Valor total divergente' });
+
+        // ---- Itens (apenas NF-e modelo 55) ----
+        const itens: any[] = [];
+        if (this.digitsOnly(h.MODELO_NOTA) === '55') {
+            const rules = await this.getFiscalRules();
+            const notaByItem = new Map<number, any>();
+            for (const it of nota.itens) notaByItem.set(it.nItem, it);
+
+            let destinacaoIntra: 'COMERCIALIZACAO' | 'USO_CONSUMO' | null = null;
+            if (intra) {
+                const destOpf = rules.opf.get(this.digitsOnly(h.OPF_CODIGO)) ?? this.destinacaoPorOpf(h.OPF_CODIGO);
+                destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
+                cabecalho.push({ campo: 'OPF_CODIGO', esperado: '1/40 ou 10', encontrado: String(h.OPF_CODIGO ?? ''), ok: !!destinacaoIntra, mensagem: destinacaoIntra ? undefined : `OPF_CODIGO ${h.OPF_CODIGO ?? ''} não reconhecido (1/40=compra, 10=uso/consumo)` });
+            }
+
+            for (const ei of erp.itens) {
+                const nItem = Number(ei.ITEM);
+                const proCodigo = String(ei.PRO_CODIGO ?? '');
+                const cfopLanc = this.digitsOnly(ei.CFOP);
+                const cstFiscalLanc = this.digitsOnly(ei.CST_FISCAL).padStart(3, '0');
+                const notaItem = notaByItem.get(nItem);
+                const cItem = confByItem.get(nItem);
+                const checks: Chk[] = [];
+                const prod = proCodigo ? await this.findInternalProduct(proCodigo) : null;
+                const descricao = prod?.PRO_DESCRICAO ?? null;
+
+                let imposto: string | null = null;
+                let destinacao: string | null = null;
+                if (cItem) {
+                    imposto = cItem.imposto_escolhido;
+                    destinacao = cItem.destinacao_mercadoria;
+                } else {
+                    const inferido = this.classificacaoPorCfop(cfopLanc);
+                    if (!inferido) {
+                        checks.push({ campo: 'CFOP', esperado: null, encontrado: cfopLanc, ok: false, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
+                        itens.push({ nItem, proCodigo, descricao, imposto: null, destinacao: null, checks });
+                        continue;
+                    }
+                    imposto = inferido.imposto;
+                    destinacao = inferido.destinacao;
+                }
+                if (intra && destinacaoIntra) destinacao = destinacaoIntra;
+
+                const monofasico = this.isMonofasicoNcm(this.cleanDigits(notaItem?.ncm ?? ''));
+                const reg = this.regraEsperada(rules, imposto!, destinacao!, monofasico);
+                const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
+
+                if (cfopExp) {
+                    checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
+                }
+                if (reg.cstFinal) {
+                    const enc = cstFiscalLanc ? cstFiscalLanc.slice(-2) : '';
+                    checks.push({ campo: 'CST final', esperado: reg.cstFinal, encontrado: enc, ok: !enc || enc === reg.cstFinal });
+                }
+                if (notaItem?.origemNota && cstFiscalLanc.length === 3) {
+                    const origemExp = rules.origem.get(notaItem.origemNota) ?? this.origemEsperada(notaItem.origemNota);
+                    const enc = cstFiscalLanc.slice(0, 1);
+                    checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
+                }
+                if (proCodigo && !prod) {
+                    checks.push({ campo: 'Cadastro', esperado: null, encontrado: null, ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
+                } else if (prod) {
+                    const cad: Array<[string, any, any]> = [
+                        ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
+                        ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
+                        ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
+                        ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
+                        ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
+                        ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],
+                    ];
+                    for (const [campo, esp, enc] of cad) {
+                        if (esp == null || String(esp).trim() === '') continue;
+                        const ok = String(enc ?? '').trim().toUpperCase() === String(esp).trim().toUpperCase();
+                        checks.push({ campo, esperado: String(esp), encontrado: String(enc ?? '') || 'vazio', ok });
+                    }
+                }
+                itens.push({ nItem, proCodigo, descricao, imposto, destinacao, checks });
+            }
+        }
+
+        return { nota, header: h, semConferencia, cabecalho, itens };
+    }
+
+    /** Achata os checks que falharam num formato de divergência (persistência/alerta). */
+    private errosFromComputado(r: { cabecalho: any[]; itens: any[] }) {
+        const erros: Array<{ escopo: 'CABECALHO' | 'ITEM'; nItem?: number; proCodigo?: string; campo: string; esperado?: string; encontrado?: string; mensagem: string }> = [];
+        for (const c of r.cabecalho) {
+            if (!c.ok) erros.push({ escopo: 'CABECALHO', campo: c.campo, esperado: c.esperado, encontrado: c.encontrado, mensagem: c.mensagem ?? `${c.campo} divergente` });
+        }
+        for (const it of r.itens) {
+            for (const c of it.checks) {
+                if (!c.ok) erros.push({ escopo: 'ITEM', nItem: it.nItem, proCodigo: it.proCodigo, campo: c.campo, esperado: c.esperado, encontrado: c.encontrado, mensagem: c.mensagem ?? `${c.campo}: esperado ${c.esperado}, lançado ${c.encontrado}` });
+            }
+        }
+        return erros;
+    }
+
+    /**
+     * Audita o lançamento de uma NF que virou LANCADA: persiste o resultado e,
+     * havendo erro, alerta o grupo via n8n/WAHA. Nunca lança; alerta 1x por NF.
      */
     private async auditarLancamentoFiscal(chaveNfe: string, opts: { enviarAlerta?: boolean } = {}): Promise<void> {
         const enviarAlerta = opts.enviarAlerta !== false;
         try {
             const nfeRow: any = await this.prisma.nfeConciliacao.findUnique({
                 where: { chave_nfe: chaveNfe },
-                select: { xml_completo: true, auditoria_alerta_em: true },
+                select: { auditoria_alerta_em: true },
             });
-            if (!nfeRow) return;
+            const r = await this.computarAuditoria(chaveNfe);
+            if (!r) return;
 
-            const xml = await this.normalizeBlobXml(nfeRow.xml_completo);
-            if (this.detectXmlType(xml) !== 'COMPLETO') return; // sem itens, não dá pra auditar
+            const erros = this.errosFromComputado(r);
+            const status = r.semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
 
-            const nota = await this.parseNotaParaAuditoria(xml);
-            if (!nota) return;
-
-            const erp = await this.fetchLancamentoErp(chaveNfe);
-            if (!erp) return; // não localizado na NF_ENTRADA (não deveria ocorrer aqui)
-
-            const conf = await this.prisma.$queryRawUnsafe<any[]>(
-                `SELECT n_item, pro_codigo, imposto_escolhido, destinacao_mercadoria
-                 FROM com_nfe_conciliacao_item WHERE chave_nfe = $1`,
-                chaveNfe,
-            );
-            const confByItem = new Map<number, any>();
-            for (const c of conf) confByItem.set(Number(c.n_item), c);
-            const semConferencia = conf.length === 0;
-
-            const intra = this.isWithinMtByChave(chaveNfe);
-            const erros: Array<{
-                escopo: 'CABECALHO' | 'ITEM';
-                nItem?: number;
-                proCodigo?: string;
-                campo: string;
-                esperado?: string;
-                encontrado?: string;
-                mensagem: string;
-            }> = [];
-
-            // ---- Cabeçalho (NF_ENTRADA × nota) ----
-            const h = erp.header;
-            const cmp = (campo: string, esperado: any, encontrado: any, norm = (x: any) => String(x ?? '').trim()) => {
-                if (norm(esperado) !== norm(encontrado)) {
-                    erros.push({ escopo: 'CABECALHO', campo, esperado: String(esperado ?? ''), encontrado: String(encontrado ?? ''), mensagem: `${campo} divergente` });
-                }
-            };
-            cmp('Número', nota.numero, h.NOTA_FISCAL, (x) => this.digitsOnly(x));
-            cmp('Série', nota.serie, h.SERIE, (x) => this.digitsOnly(x));
-            cmp('Modelo', nota.modelo, h.MODELO_NOTA, (x) => this.digitsOnly(x));
-            cmp('Chave', nota.chave, h.CHAVE_NFE, (x) => this.digitsOnly(x));
-            const cnpjChave = this.digitsOnly(h.CHAVE_NFE).slice(6, 20);
-            cmp('CNPJ emitente', this.digitsOnly(nota.cnpjEmitente), cnpjChave);
-            const dEmiNota = (nota.dataEmissao || '').slice(0, 10);
-            const dEmiErp = h.DT_EMISSAO ? new Date(h.DT_EMISSAO).toISOString().slice(0, 10) : '';
-            if (dEmiNota && dEmiErp && dEmiNota !== dEmiErp) {
-                erros.push({ escopo: 'CABECALHO', campo: 'Emissão', esperado: dEmiNota, encontrado: dEmiErp, mensagem: 'Data de emissão divergente' });
-            }
-            if (Math.abs((Number(h.TOTAL_NOTA) || 0) - nota.valorTotal) > 0.01) {
-                erros.push({ escopo: 'CABECALHO', campo: 'Valor total', esperado: nota.valorTotal.toFixed(2), encontrado: Number(h.TOTAL_NOTA || 0).toFixed(2), mensagem: 'Valor total divergente' });
-            }
-
-            // ---- Itens (apenas NF-e modelo 55) ----
-            if (this.digitsOnly(h.MODELO_NOTA) === '55') {
-                const rules = await this.getFiscalRules();
-                const notaByItem = new Map<number, any>();
-                for (const it of nota.itens) notaByItem.set(it.nItem, it);
-
-                // Notas DENTRO do estado: a destinação (revenda x uso/consumo) é
-                // determinada pelo OPF_CODIGO da nota, não pela tela nem pelo CFOP.
-                let destinacaoIntra: 'COMERCIALIZACAO' | 'USO_CONSUMO' | null = null;
-                if (intra) {
-                    const destOpf = rules.opf.get(this.digitsOnly(h.OPF_CODIGO)) ?? this.destinacaoPorOpf(h.OPF_CODIGO);
-                    destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
-                    if (!destinacaoIntra) {
-                        erros.push({ escopo: 'CABECALHO', campo: 'OPF', encontrado: String(h.OPF_CODIGO ?? ''), mensagem: `OPF_CODIGO ${h.OPF_CODIGO ?? ''} não reconhecido (esperado 1/40=compra, 10=uso/consumo)` });
-                    }
-                }
-
-                for (const ei of erp.itens) {
-                    const nItem = Number(ei.ITEM);
-                    const proCodigo = String(ei.PRO_CODIGO ?? '');
-                    const cfopLanc = this.digitsOnly(ei.CFOP);
-                    const cstFiscalLanc = this.digitsOnly(ei.CST_FISCAL).padStart(3, '0');
-                    const notaItem = notaByItem.get(nItem);
-                    const cItem = confByItem.get(nItem);
-
-                    let imposto: string | undefined;
-                    let destinacao: string | undefined;
-                    if (cItem) {
-                        imposto = cItem.imposto_escolhido;
-                        destinacao = cItem.destinacao_mercadoria;
-                    } else {
-                        const inferido = this.classificacaoPorCfop(cfopLanc);
-                        if (!inferido) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', encontrado: cfopLanc, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
-                            continue;
-                        }
-                        imposto = inferido.imposto;
-                        destinacao = inferido.destinacao;
-                    }
-
-                    // Dentro do estado, o OPF_CODIGO manda na destinação.
-                    if (intra && destinacaoIntra) destinacao = destinacaoIntra;
-
-                    const monofasico = this.isMonofasicoNcm(this.cleanDigits(notaItem?.ncm ?? ''));
-                    const reg = this.regraEsperada(rules, imposto!, destinacao!, monofasico);
-                    const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
-                    const cstFinalExp = reg.cstFinal;
-
-                    if (cfopExp && cfopLanc && cfopLanc !== cfopExp) {
-                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc, mensagem: `CFOP esperado ${cfopExp}, lançado ${cfopLanc}` });
-                    }
-                    if (cstFinalExp && cstFiscalLanc && cstFiscalLanc.slice(-2) !== cstFinalExp) {
-                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST final', esperado: cstFinalExp, encontrado: cstFiscalLanc.slice(-2), mensagem: `CST final esperado ${cstFinalExp}, lançado ${cstFiscalLanc.slice(-2)}` });
-                    }
-                    if (notaItem?.origemNota && cstFiscalLanc.length === 3) {
-                        const origemExp = rules.origem.get(notaItem.origemNota) ?? this.origemEsperada(notaItem.origemNota);
-                        if (cstFiscalLanc.slice(0, 1) !== origemExp) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST origem', esperado: origemExp, encontrado: cstFiscalLanc.slice(0, 1), mensagem: `Origem do CST esperada ${origemExp}, lançada ${cstFiscalLanc.slice(0, 1)}` });
-                        }
-                    }
-
-                    // Conferência do cadastro do produto (Stage_Produtos pelo PRO_CODIGO lançado)
-                    if (proCodigo) {
-                        const prod = await this.findInternalProduct(proCodigo);
-                        if (!prod) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'Cadastro', mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
-                        } else {
-                            const checks: Array<[string, any, any]> = [
-                                ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
-                                ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
-                                ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
-                                ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
-                                ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
-                                ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],
-                            ];
-                            for (const [campo, esp, enc] of checks) {
-                                if (esp == null || String(esp).trim() === '') continue;
-                                if (String(enc ?? '').trim().toUpperCase() !== String(esp).trim().toUpperCase()) {
-                                    erros.push({ escopo: 'ITEM', nItem, proCodigo, campo, esperado: String(esp), encontrado: String(enc ?? '') || 'vazio', mensagem: `${campo}: esperado ${esp}, cadastrado ${String(enc ?? '') || 'vazio'}` });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            const status = semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
-
-            // ---- Persistência do resultado ----
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
                 data: { auditoria_fiscal_em: new Date(), auditoria_fiscal_status: status },
@@ -2598,33 +2614,25 @@ export class IcmsService {
                 );
             }
 
-            // ---- Alerta (1x por NF, só se houver erro; reconferência manual não alerta) ----
-            if (enviarAlerta && erros.length > 0 && !nfeRow.auditoria_alerta_em) {
+            if (enviarAlerta && erros.length > 0 && !nfeRow?.auditoria_alerta_em) {
                 const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
                 if (!webhook) {
                     this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
                 } else {
                     const payload = {
                         chaveNfe,
-                        numeroNf: nota.numero,
-                        serie: nota.serie,
-                        emitente: nota.emitente,
-                        ufEmitente: nota.ufEmitente,
-                        dtEntrada: h.DT_ENTRADA ? new Date(h.DT_ENTRADA).toISOString().slice(0, 10) : null,
+                        numeroNf: r.nota.numero,
+                        serie: r.nota.serie,
+                        emitente: r.nota.emitente,
+                        ufEmitente: r.nota.ufEmitente,
+                        dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
                         statusAuditoria: status,
                         totalErros: erros.length,
                         erros,
                     };
-                    const resp = await fetch(webhook, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                    });
+                    const resp = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (resp.ok) {
-                        await this.prisma.nfeConciliacao.update({
-                            where: { chave_nfe: chaveNfe },
-                            data: { auditoria_alerta_em: new Date() },
-                        });
+                        await this.prisma.nfeConciliacao.update({ where: { chave_nfe: chaveNfe }, data: { auditoria_alerta_em: new Date() } });
                         this.logger.log(`Alerta de auditoria enviado para ${chaveNfe} (${erros.length} erro(s)).`, 'Auditoria');
                     } else {
                         this.logger.error(`n8n recusou alerta de auditoria ${chaveNfe}: HTTP ${resp.status}.`, undefined, 'Auditoria');
@@ -2632,11 +2640,7 @@ export class IcmsService {
                 }
             }
         } catch (e) {
-            this.logger.error(
-                `Falha ao auditar lançamento ${chaveNfe}`,
-                e instanceof Error ? e.stack : String(e),
-                'Auditoria',
-            );
+            this.logger.error(`Falha ao auditar lançamento ${chaveNfe}`, e instanceof Error ? e.stack : String(e), 'Auditoria');
         }
     }
 
@@ -2733,7 +2737,8 @@ export class IcmsService {
         };
     }
 
-    /** Detalhe de uma NF: cabeçalho + divergências item a item. */
+    /** Detalhe de uma NF: cabeçalho + itens (código/descrição), com cada
+     *  conferência marcada como ok/divergente. Calculado ao vivo. */
     async getAuditoriaDetalhe(chaveNfe: string) {
         const rows = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
@@ -2742,37 +2747,49 @@ export class IcmsService {
              FROM com_nfe_conciliacao WHERE chave_nfe = $1`,
             chaveNfe,
         );
-        const h = rows[0];
-        if (!h) return null;
+        const b = rows[0];
+        if (!b) return null;
 
-        const divs = await this.prisma.$queryRawUnsafe<any[]>(
-            `SELECT n_item, campo, esperado, encontrado, mensagem
-             FROM com_nfe_auditoria_item WHERE chave_nfe = $1 ORDER BY n_item, campo`,
-            chaveNfe,
-        );
+        const r = await this.computarAuditoria(chaveNfe);
+
+        const baseHeader = {
+            chaveNfe: b.chave_nfe,
+            numero: String(Number(b.numero ?? '0')),
+            serie: r?.nota?.serie ?? null,
+            emitente: b.emitente ?? r?.nota?.emitente ?? null,
+            cnpj: b.cnpj_emitente,
+            uf: this.cufToSigla(b.cuf),
+            dentroEstado: b.cuf === '51',
+            dataEmissao: b.data_emissao,
+            dtEntrada: b.dt_entrada,
+            valorTotal: Number(b.valor_total || 0),
+            auditadoEm: b.auditoria_fiscal_em,
+        };
+
+        if (!r) {
+            // Sem XML completo ou não localizada na NF_ENTRADA: não dá pra detalhar.
+            return {
+                header: { ...baseHeader, status: b.auditoria_fiscal_status ?? 'PENDENTE', totalErros: 0, semConferencia: false, naoAuditavel: true },
+                cabecalho: [],
+                itens: [],
+            };
+        }
+
+        const contaErros = (cks: any[]) => cks.filter((c) => !c.ok).length;
+        const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
+        const status = r.semConferencia ? 'SEM_CONFERENCIA' : totalErros > 0 ? 'DIVERGENTE' : 'OK';
 
         return {
-            header: {
-                chaveNfe: h.chave_nfe,
-                numero: String(Number(h.numero ?? '0')),
-                emitente: h.emitente,
-                cnpj: h.cnpj_emitente,
-                uf: this.cufToSigla(h.cuf),
-                dentroEstado: h.cuf === '51',
-                dataEmissao: h.data_emissao,
-                dtEntrada: h.dt_entrada,
-                valorTotal: Number(h.valor_total || 0),
-                status: h.auditoria_fiscal_status ?? 'PENDENTE',
-                auditadoEm: h.auditoria_fiscal_em,
-            },
-            totalErros: divs.length,
-            divergencias: divs.map((d) => ({
-                nItem: Number(d.n_item),
-                escopo: Number(d.n_item) === 0 ? 'CABECALHO' : 'ITEM',
-                campo: d.campo,
-                esperado: d.esperado,
-                encontrado: d.encontrado,
-                mensagem: d.mensagem,
+            header: { ...baseHeader, status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false },
+            cabecalho: r.cabecalho,
+            itens: r.itens.map((it) => ({
+                nItem: it.nItem,
+                proCodigo: it.proCodigo,
+                descricao: it.descricao,
+                imposto: it.imposto,
+                destinacao: it.destinacao,
+                totalErros: contaErros(it.checks),
+                checks: it.checks,
             })),
         };
     }

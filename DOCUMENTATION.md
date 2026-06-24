@@ -387,7 +387,10 @@ Contrato do webhook (intranet → n8n):
   Query params: `q` (nº ou chave), `emitente` (nome ou CNPJ), `escopo`
   (`TODOS`|`DENTRO`|`FORA`), `dtInicio`, `dtFim` (data de entrada; **default = mês
   corrente**), `page`, `pageSize`. Retorna `{ page, pageSize, total, items[] }`.
-* `GET /icms/auditoria/:chaveNfe` — detalhe: cabeçalho + `divergencias[]` (item a item).
+* `GET /icms/auditoria/:chaveNfe` — detalhe calculado ao vivo (`computarAuditoria`):
+  `{ header, cabecalho[], itens[] }`. Cada item traz `proCodigo`, `descricao`,
+  `imposto`, `destinacao` e `checks[]` com cada conferência marcada `ok: true|false`
+  (mostra o que está correto **e** o que divergiu). O cabeçalho também vem como `checks`.
 * `POST /icms/auditoria/:chaveNfe/reconferir` — **reexecuta a auditoria manualmente
   sem disparar o WhatsApp** (`auditarLancamentoFiscal(chave, { enviarAlerta: false })`)
   e devolve o detalhe atualizado.

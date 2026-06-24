@@ -107,8 +107,13 @@ export declare class IcmsController {
     }>;
     getAuditoria(chaveNfe: string): Promise<{
         header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
             chaveNfe: any;
             numero: string;
+            serie: any;
             emitente: any;
             cnpj: any;
             uf: string;
@@ -116,23 +121,60 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
-            status: any;
             auditadoEm: any;
         };
-        totalErros: number;
-        divergencias: {
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            auditadoEm: any;
+        };
+        cabecalho: {
+            campo: string;
+            esperado: string | null;
+            encontrado: string | null;
+            ok: boolean;
+            mensagem?: string;
+        }[];
+        itens: {
             nItem: number;
-            escopo: string;
-            campo: any;
-            esperado: any;
-            encontrado: any;
-            mensagem: any;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
         }[];
     }>;
     reconferirAuditoria(chaveNfe: string): Promise<{
         header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
             chaveNfe: any;
             numero: string;
+            serie: any;
             emitente: any;
             cnpj: any;
             uf: string;
@@ -140,17 +182,49 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
-            status: any;
             auditadoEm: any;
         };
-        totalErros: number;
-        divergencias: {
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            auditadoEm: any;
+        };
+        cabecalho: {
+            campo: string;
+            esperado: string | null;
+            encontrado: string | null;
+            ok: boolean;
+            mensagem?: string;
+        }[];
+        itens: {
             nItem: number;
-            escopo: string;
-            campo: any;
-            esperado: any;
-            encontrado: any;
-            mensagem: any;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
         }[];
     }>;
     getFiscalRegras(): Promise<{

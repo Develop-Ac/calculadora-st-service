@@ -1981,132 +1981,154 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const itens = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${itemSql.replace(/'/g, "''")}')`, {}, { timeout: 300000, allowZeroRows: true });
         return { header, itens };
     }
+    async computarAuditoria(chaveNfe) {
+        var _a, _b, _c, _d, _e, _f, _g;
+        const nfeRow = await this.prisma.nfeConciliacao.findUnique({
+            where: { chave_nfe: chaveNfe },
+            select: { xml_completo: true },
+        });
+        if (!nfeRow)
+            return null;
+        const xml = await this.normalizeBlobXml(nfeRow.xml_completo);
+        if (this.detectXmlType(xml) !== 'COMPLETO')
+            return null;
+        const nota = await this.parseNotaParaAuditoria(xml);
+        if (!nota)
+            return null;
+        const erp = await this.fetchLancamentoErp(chaveNfe);
+        if (!erp)
+            return null;
+        const conf = await this.prisma.$queryRawUnsafe(`SELECT n_item, pro_codigo, imposto_escolhido, destinacao_mercadoria
+             FROM com_nfe_conciliacao_item WHERE chave_nfe = $1`, chaveNfe);
+        const confByItem = new Map();
+        for (const c of conf)
+            confByItem.set(Number(c.n_item), c);
+        const semConferencia = conf.length === 0;
+        const intra = this.isWithinMtByChave(chaveNfe);
+        const h = erp.header;
+        const cabecalho = [];
+        const addCab = (campo, esperado, encontrado, norm = (x) => String(x !== null && x !== void 0 ? x : '').trim()) => {
+            const ok = norm(esperado) === norm(encontrado);
+            cabecalho.push({ campo, esperado: String(esperado !== null && esperado !== void 0 ? esperado : ''), encontrado: String(encontrado !== null && encontrado !== void 0 ? encontrado : ''), ok, mensagem: ok ? undefined : `${campo} divergente` });
+        };
+        addCab('Número', nota.numero, h.NOTA_FISCAL, (x) => this.digitsOnly(x));
+        addCab('Série', nota.serie, h.SERIE, (x) => this.digitsOnly(x));
+        addCab('Modelo', nota.modelo, h.MODELO_NOTA, (x) => this.digitsOnly(x));
+        addCab('Chave', nota.chave, h.CHAVE_NFE, (x) => this.digitsOnly(x));
+        addCab('CNPJ emitente', this.digitsOnly(nota.cnpjEmitente), this.digitsOnly(h.CHAVE_NFE).slice(6, 20));
+        const dEmiNota = (nota.dataEmissao || '').slice(0, 10);
+        const dEmiErp = h.DT_EMISSAO ? new Date(h.DT_EMISSAO).toISOString().slice(0, 10) : '';
+        const emissaoOk = !(dEmiNota && dEmiErp && dEmiNota !== dEmiErp);
+        cabecalho.push({ campo: 'Emissão', esperado: dEmiNota, encontrado: dEmiErp, ok: emissaoOk, mensagem: emissaoOk ? undefined : 'Data de emissão divergente' });
+        const valorOk = Math.abs((Number(h.TOTAL_NOTA) || 0) - nota.valorTotal) <= 0.01;
+        cabecalho.push({ campo: 'Valor total', esperado: nota.valorTotal.toFixed(2), encontrado: Number(h.TOTAL_NOTA || 0).toFixed(2), ok: valorOk, mensagem: valorOk ? undefined : 'Valor total divergente' });
+        const itens = [];
+        if (this.digitsOnly(h.MODELO_NOTA) === '55') {
+            const rules = await this.getFiscalRules();
+            const notaByItem = new Map();
+            for (const it of nota.itens)
+                notaByItem.set(it.nItem, it);
+            let destinacaoIntra = null;
+            if (intra) {
+                const destOpf = (_a = rules.opf.get(this.digitsOnly(h.OPF_CODIGO))) !== null && _a !== void 0 ? _a : this.destinacaoPorOpf(h.OPF_CODIGO);
+                destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
+                cabecalho.push({ campo: 'OPF_CODIGO', esperado: '1/40 ou 10', encontrado: String((_b = h.OPF_CODIGO) !== null && _b !== void 0 ? _b : ''), ok: !!destinacaoIntra, mensagem: destinacaoIntra ? undefined : `OPF_CODIGO ${(_c = h.OPF_CODIGO) !== null && _c !== void 0 ? _c : ''} não reconhecido (1/40=compra, 10=uso/consumo)` });
+            }
+            for (const ei of erp.itens) {
+                const nItem = Number(ei.ITEM);
+                const proCodigo = String((_d = ei.PRO_CODIGO) !== null && _d !== void 0 ? _d : '');
+                const cfopLanc = this.digitsOnly(ei.CFOP);
+                const cstFiscalLanc = this.digitsOnly(ei.CST_FISCAL).padStart(3, '0');
+                const notaItem = notaByItem.get(nItem);
+                const cItem = confByItem.get(nItem);
+                const checks = [];
+                const prod = proCodigo ? await this.findInternalProduct(proCodigo) : null;
+                const descricao = (_e = prod === null || prod === void 0 ? void 0 : prod.PRO_DESCRICAO) !== null && _e !== void 0 ? _e : null;
+                let imposto = null;
+                let destinacao = null;
+                if (cItem) {
+                    imposto = cItem.imposto_escolhido;
+                    destinacao = cItem.destinacao_mercadoria;
+                }
+                else {
+                    const inferido = this.classificacaoPorCfop(cfopLanc);
+                    if (!inferido) {
+                        checks.push({ campo: 'CFOP', esperado: null, encontrado: cfopLanc, ok: false, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
+                        itens.push({ nItem, proCodigo, descricao, imposto: null, destinacao: null, checks });
+                        continue;
+                    }
+                    imposto = inferido.imposto;
+                    destinacao = inferido.destinacao;
+                }
+                if (intra && destinacaoIntra)
+                    destinacao = destinacaoIntra;
+                const monofasico = this.isMonofasicoNcm(this.cleanDigits((_f = notaItem === null || notaItem === void 0 ? void 0 : notaItem.ncm) !== null && _f !== void 0 ? _f : ''));
+                const reg = this.regraEsperada(rules, imposto, destinacao, monofasico);
+                const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
+                if (cfopExp) {
+                    checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
+                }
+                if (reg.cstFinal) {
+                    const enc = cstFiscalLanc ? cstFiscalLanc.slice(-2) : '';
+                    checks.push({ campo: 'CST final', esperado: reg.cstFinal, encontrado: enc, ok: !enc || enc === reg.cstFinal });
+                }
+                if ((notaItem === null || notaItem === void 0 ? void 0 : notaItem.origemNota) && cstFiscalLanc.length === 3) {
+                    const origemExp = (_g = rules.origem.get(notaItem.origemNota)) !== null && _g !== void 0 ? _g : this.origemEsperada(notaItem.origemNota);
+                    const enc = cstFiscalLanc.slice(0, 1);
+                    checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
+                }
+                if (proCodigo && !prod) {
+                    checks.push({ campo: 'Cadastro', esperado: null, encontrado: null, ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
+                }
+                else if (prod) {
+                    const cad = [
+                        ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
+                        ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
+                        ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
+                        ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
+                        ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
+                        ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],
+                    ];
+                    for (const [campo, esp, enc] of cad) {
+                        if (esp == null || String(esp).trim() === '')
+                            continue;
+                        const ok = String(enc !== null && enc !== void 0 ? enc : '').trim().toUpperCase() === String(esp).trim().toUpperCase();
+                        checks.push({ campo, esperado: String(esp), encontrado: String(enc !== null && enc !== void 0 ? enc : '') || 'vazio', ok });
+                    }
+                }
+                itens.push({ nItem, proCodigo, descricao, imposto, destinacao, checks });
+            }
+        }
+        return { nota, header: h, semConferencia, cabecalho, itens };
+    }
+    errosFromComputado(r) {
+        var _a, _b;
+        const erros = [];
+        for (const c of r.cabecalho) {
+            if (!c.ok)
+                erros.push({ escopo: 'CABECALHO', campo: c.campo, esperado: c.esperado, encontrado: c.encontrado, mensagem: (_a = c.mensagem) !== null && _a !== void 0 ? _a : `${c.campo} divergente` });
+        }
+        for (const it of r.itens) {
+            for (const c of it.checks) {
+                if (!c.ok)
+                    erros.push({ escopo: 'ITEM', nItem: it.nItem, proCodigo: it.proCodigo, campo: c.campo, esperado: c.esperado, encontrado: c.encontrado, mensagem: (_b = c.mensagem) !== null && _b !== void 0 ? _b : `${c.campo}: esperado ${c.esperado}, lançado ${c.encontrado}` });
+            }
+        }
+        return erros;
+    }
     async auditarLancamentoFiscal(chaveNfe, opts = {}) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        var _a, _b, _c;
         const enviarAlerta = opts.enviarAlerta !== false;
         try {
             const nfeRow = await this.prisma.nfeConciliacao.findUnique({
                 where: { chave_nfe: chaveNfe },
-                select: { xml_completo: true, auditoria_alerta_em: true },
+                select: { auditoria_alerta_em: true },
             });
-            if (!nfeRow)
+            const r = await this.computarAuditoria(chaveNfe);
+            if (!r)
                 return;
-            const xml = await this.normalizeBlobXml(nfeRow.xml_completo);
-            if (this.detectXmlType(xml) !== 'COMPLETO')
-                return;
-            const nota = await this.parseNotaParaAuditoria(xml);
-            if (!nota)
-                return;
-            const erp = await this.fetchLancamentoErp(chaveNfe);
-            if (!erp)
-                return;
-            const conf = await this.prisma.$queryRawUnsafe(`SELECT n_item, pro_codigo, imposto_escolhido, destinacao_mercadoria
-                 FROM com_nfe_conciliacao_item WHERE chave_nfe = $1`, chaveNfe);
-            const confByItem = new Map();
-            for (const c of conf)
-                confByItem.set(Number(c.n_item), c);
-            const semConferencia = conf.length === 0;
-            const intra = this.isWithinMtByChave(chaveNfe);
-            const erros = [];
-            const h = erp.header;
-            const cmp = (campo, esperado, encontrado, norm = (x) => String(x !== null && x !== void 0 ? x : '').trim()) => {
-                if (norm(esperado) !== norm(encontrado)) {
-                    erros.push({ escopo: 'CABECALHO', campo, esperado: String(esperado !== null && esperado !== void 0 ? esperado : ''), encontrado: String(encontrado !== null && encontrado !== void 0 ? encontrado : ''), mensagem: `${campo} divergente` });
-                }
-            };
-            cmp('Número', nota.numero, h.NOTA_FISCAL, (x) => this.digitsOnly(x));
-            cmp('Série', nota.serie, h.SERIE, (x) => this.digitsOnly(x));
-            cmp('Modelo', nota.modelo, h.MODELO_NOTA, (x) => this.digitsOnly(x));
-            cmp('Chave', nota.chave, h.CHAVE_NFE, (x) => this.digitsOnly(x));
-            const cnpjChave = this.digitsOnly(h.CHAVE_NFE).slice(6, 20);
-            cmp('CNPJ emitente', this.digitsOnly(nota.cnpjEmitente), cnpjChave);
-            const dEmiNota = (nota.dataEmissao || '').slice(0, 10);
-            const dEmiErp = h.DT_EMISSAO ? new Date(h.DT_EMISSAO).toISOString().slice(0, 10) : '';
-            if (dEmiNota && dEmiErp && dEmiNota !== dEmiErp) {
-                erros.push({ escopo: 'CABECALHO', campo: 'Emissão', esperado: dEmiNota, encontrado: dEmiErp, mensagem: 'Data de emissão divergente' });
-            }
-            if (Math.abs((Number(h.TOTAL_NOTA) || 0) - nota.valorTotal) > 0.01) {
-                erros.push({ escopo: 'CABECALHO', campo: 'Valor total', esperado: nota.valorTotal.toFixed(2), encontrado: Number(h.TOTAL_NOTA || 0).toFixed(2), mensagem: 'Valor total divergente' });
-            }
-            if (this.digitsOnly(h.MODELO_NOTA) === '55') {
-                const rules = await this.getFiscalRules();
-                const notaByItem = new Map();
-                for (const it of nota.itens)
-                    notaByItem.set(it.nItem, it);
-                let destinacaoIntra = null;
-                if (intra) {
-                    const destOpf = (_a = rules.opf.get(this.digitsOnly(h.OPF_CODIGO))) !== null && _a !== void 0 ? _a : this.destinacaoPorOpf(h.OPF_CODIGO);
-                    destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
-                    if (!destinacaoIntra) {
-                        erros.push({ escopo: 'CABECALHO', campo: 'OPF', encontrado: String((_b = h.OPF_CODIGO) !== null && _b !== void 0 ? _b : ''), mensagem: `OPF_CODIGO ${(_c = h.OPF_CODIGO) !== null && _c !== void 0 ? _c : ''} não reconhecido (esperado 1/40=compra, 10=uso/consumo)` });
-                    }
-                }
-                for (const ei of erp.itens) {
-                    const nItem = Number(ei.ITEM);
-                    const proCodigo = String((_d = ei.PRO_CODIGO) !== null && _d !== void 0 ? _d : '');
-                    const cfopLanc = this.digitsOnly(ei.CFOP);
-                    const cstFiscalLanc = this.digitsOnly(ei.CST_FISCAL).padStart(3, '0');
-                    const notaItem = notaByItem.get(nItem);
-                    const cItem = confByItem.get(nItem);
-                    let imposto;
-                    let destinacao;
-                    if (cItem) {
-                        imposto = cItem.imposto_escolhido;
-                        destinacao = cItem.destinacao_mercadoria;
-                    }
-                    else {
-                        const inferido = this.classificacaoPorCfop(cfopLanc);
-                        if (!inferido) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', encontrado: cfopLanc, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
-                            continue;
-                        }
-                        imposto = inferido.imposto;
-                        destinacao = inferido.destinacao;
-                    }
-                    if (intra && destinacaoIntra)
-                        destinacao = destinacaoIntra;
-                    const monofasico = this.isMonofasicoNcm(this.cleanDigits((_e = notaItem === null || notaItem === void 0 ? void 0 : notaItem.ncm) !== null && _e !== void 0 ? _e : ''));
-                    const reg = this.regraEsperada(rules, imposto, destinacao, monofasico);
-                    const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
-                    const cstFinalExp = reg.cstFinal;
-                    if (cfopExp && cfopLanc && cfopLanc !== cfopExp) {
-                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc, mensagem: `CFOP esperado ${cfopExp}, lançado ${cfopLanc}` });
-                    }
-                    if (cstFinalExp && cstFiscalLanc && cstFiscalLanc.slice(-2) !== cstFinalExp) {
-                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST final', esperado: cstFinalExp, encontrado: cstFiscalLanc.slice(-2), mensagem: `CST final esperado ${cstFinalExp}, lançado ${cstFiscalLanc.slice(-2)}` });
-                    }
-                    if ((notaItem === null || notaItem === void 0 ? void 0 : notaItem.origemNota) && cstFiscalLanc.length === 3) {
-                        const origemExp = (_f = rules.origem.get(notaItem.origemNota)) !== null && _f !== void 0 ? _f : this.origemEsperada(notaItem.origemNota);
-                        if (cstFiscalLanc.slice(0, 1) !== origemExp) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST origem', esperado: origemExp, encontrado: cstFiscalLanc.slice(0, 1), mensagem: `Origem do CST esperada ${origemExp}, lançada ${cstFiscalLanc.slice(0, 1)}` });
-                        }
-                    }
-                    if (proCodigo) {
-                        const prod = await this.findInternalProduct(proCodigo);
-                        if (!prod) {
-                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'Cadastro', mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
-                        }
-                        else {
-                            const checks = [
-                                ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
-                                ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
-                                ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
-                                ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
-                                ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
-                                ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],
-                            ];
-                            for (const [campo, esp, enc] of checks) {
-                                if (esp == null || String(esp).trim() === '')
-                                    continue;
-                                if (String(enc !== null && enc !== void 0 ? enc : '').trim().toUpperCase() !== String(esp).trim().toUpperCase()) {
-                                    erros.push({ escopo: 'ITEM', nItem, proCodigo, campo, esperado: String(esp), encontrado: String(enc !== null && enc !== void 0 ? enc : '') || 'vazio', mensagem: `${campo}: esperado ${esp}, cadastrado ${String(enc !== null && enc !== void 0 ? enc : '') || 'vazio'}` });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            const status = semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
+            const erros = this.errosFromComputado(r);
+            const status = r.semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
                 data: { auditoria_fiscal_em: new Date(), auditoria_fiscal_status: status },
@@ -2116,9 +2138,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 await this.prisma.$executeRawUnsafe(`INSERT INTO com_nfe_auditoria_item (chave_nfe, n_item, campo, esperado, encontrado, mensagem)
                      VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT (chave_nfe, n_item, campo) DO UPDATE
-                       SET esperado = EXCLUDED.esperado, encontrado = EXCLUDED.encontrado, mensagem = EXCLUDED.mensagem`, chaveNfe, (_g = e.nItem) !== null && _g !== void 0 ? _g : 0, e.campo, (_h = e.esperado) !== null && _h !== void 0 ? _h : null, (_j = e.encontrado) !== null && _j !== void 0 ? _j : null, e.mensagem);
+                       SET esperado = EXCLUDED.esperado, encontrado = EXCLUDED.encontrado, mensagem = EXCLUDED.mensagem`, chaveNfe, (_a = e.nItem) !== null && _a !== void 0 ? _a : 0, e.campo, (_b = e.esperado) !== null && _b !== void 0 ? _b : null, (_c = e.encontrado) !== null && _c !== void 0 ? _c : null, e.mensagem);
             }
-            if (enviarAlerta && erros.length > 0 && !nfeRow.auditoria_alerta_em) {
+            if (enviarAlerta && erros.length > 0 && !(nfeRow === null || nfeRow === void 0 ? void 0 : nfeRow.auditoria_alerta_em)) {
                 const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
                 if (!webhook) {
                     this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
@@ -2126,25 +2148,18 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 else {
                     const payload = {
                         chaveNfe,
-                        numeroNf: nota.numero,
-                        serie: nota.serie,
-                        emitente: nota.emitente,
-                        ufEmitente: nota.ufEmitente,
-                        dtEntrada: h.DT_ENTRADA ? new Date(h.DT_ENTRADA).toISOString().slice(0, 10) : null,
+                        numeroNf: r.nota.numero,
+                        serie: r.nota.serie,
+                        emitente: r.nota.emitente,
+                        ufEmitente: r.nota.ufEmitente,
+                        dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
                         statusAuditoria: status,
                         totalErros: erros.length,
                         erros,
                     };
-                    const resp = await fetch(webhook, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload),
-                    });
+                    const resp = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (resp.ok) {
-                        await this.prisma.nfeConciliacao.update({
-                            where: { chave_nfe: chaveNfe },
-                            data: { auditoria_alerta_em: new Date() },
-                        });
+                        await this.prisma.nfeConciliacao.update({ where: { chave_nfe: chaveNfe }, data: { auditoria_alerta_em: new Date() } });
                         this.logger.log(`Alerta de auditoria enviado para ${chaveNfe} (${erros.length} erro(s)).`, 'Auditoria');
                     }
                     else {
@@ -2232,38 +2247,49 @@ let IcmsService = IcmsService_1 = class IcmsService {
         };
     }
     async getAuditoriaDetalhe(chaveNfe) {
-        var _a, _b;
+        var _a, _b, _c, _d, _e, _f, _g;
         const rows = await this.prisma.$queryRawUnsafe(`SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
                     auditoria_fiscal_status, auditoria_fiscal_em,
                     substring(chave_nfe from 26 for 9) AS numero, left(chave_nfe, 2) AS cuf
              FROM com_nfe_conciliacao WHERE chave_nfe = $1`, chaveNfe);
-        const h = rows[0];
-        if (!h)
+        const b = rows[0];
+        if (!b)
             return null;
-        const divs = await this.prisma.$queryRawUnsafe(`SELECT n_item, campo, esperado, encontrado, mensagem
-             FROM com_nfe_auditoria_item WHERE chave_nfe = $1 ORDER BY n_item, campo`, chaveNfe);
+        const r = await this.computarAuditoria(chaveNfe);
+        const baseHeader = {
+            chaveNfe: b.chave_nfe,
+            numero: String(Number((_a = b.numero) !== null && _a !== void 0 ? _a : '0')),
+            serie: (_c = (_b = r === null || r === void 0 ? void 0 : r.nota) === null || _b === void 0 ? void 0 : _b.serie) !== null && _c !== void 0 ? _c : null,
+            emitente: (_f = (_d = b.emitente) !== null && _d !== void 0 ? _d : (_e = r === null || r === void 0 ? void 0 : r.nota) === null || _e === void 0 ? void 0 : _e.emitente) !== null && _f !== void 0 ? _f : null,
+            cnpj: b.cnpj_emitente,
+            uf: this.cufToSigla(b.cuf),
+            dentroEstado: b.cuf === '51',
+            dataEmissao: b.data_emissao,
+            dtEntrada: b.dt_entrada,
+            valorTotal: Number(b.valor_total || 0),
+            auditadoEm: b.auditoria_fiscal_em,
+        };
+        if (!r) {
+            return {
+                header: Object.assign(Object.assign({}, baseHeader), { status: (_g = b.auditoria_fiscal_status) !== null && _g !== void 0 ? _g : 'PENDENTE', totalErros: 0, semConferencia: false, naoAuditavel: true }),
+                cabecalho: [],
+                itens: [],
+            };
+        }
+        const contaErros = (cks) => cks.filter((c) => !c.ok).length;
+        const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
+        const status = r.semConferencia ? 'SEM_CONFERENCIA' : totalErros > 0 ? 'DIVERGENTE' : 'OK';
         return {
-            header: {
-                chaveNfe: h.chave_nfe,
-                numero: String(Number((_a = h.numero) !== null && _a !== void 0 ? _a : '0')),
-                emitente: h.emitente,
-                cnpj: h.cnpj_emitente,
-                uf: this.cufToSigla(h.cuf),
-                dentroEstado: h.cuf === '51',
-                dataEmissao: h.data_emissao,
-                dtEntrada: h.dt_entrada,
-                valorTotal: Number(h.valor_total || 0),
-                status: (_b = h.auditoria_fiscal_status) !== null && _b !== void 0 ? _b : 'PENDENTE',
-                auditadoEm: h.auditoria_fiscal_em,
-            },
-            totalErros: divs.length,
-            divergencias: divs.map((d) => ({
-                nItem: Number(d.n_item),
-                escopo: Number(d.n_item) === 0 ? 'CABECALHO' : 'ITEM',
-                campo: d.campo,
-                esperado: d.esperado,
-                encontrado: d.encontrado,
-                mensagem: d.mensagem,
+            header: Object.assign(Object.assign({}, baseHeader), { status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false }),
+            cabecalho: r.cabecalho,
+            itens: r.itens.map((it) => ({
+                nItem: it.nItem,
+                proCodigo: it.proCodigo,
+                descricao: it.descricao,
+                imposto: it.imposto,
+                destinacao: it.destinacao,
+                totalErros: contaErros(it.checks),
+                checks: it.checks,
             })),
         };
     }
