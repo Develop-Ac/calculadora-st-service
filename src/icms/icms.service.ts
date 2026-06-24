@@ -2493,11 +2493,12 @@ export class IcmsService {
             const notaByItem = new Map<number, any>();
             for (const it of nota.itens) notaByItem.set(it.nItem, it);
 
+            // OPF_CODIGO só DETERMINA a destinação (revenda x uso/consumo) das
+            // notas intra; não entra como item de conferência.
             let destinacaoIntra: 'COMERCIALIZACAO' | 'USO_CONSUMO' | null = null;
             if (intra) {
                 const destOpf = rules.opf.get(this.digitsOnly(h.OPF_CODIGO)) ?? this.destinacaoPorOpf(h.OPF_CODIGO);
                 destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
-                cabecalho.push({ campo: 'OPF_CODIGO', esperado: '1/40 ou 10', encontrado: String(h.OPF_CODIGO ?? ''), ok: !!destinacaoIntra, mensagem: destinacaoIntra ? undefined : `OPF_CODIGO ${h.OPF_CODIGO ?? ''} não reconhecido (1/40=compra, 10=uso/consumo)` });
             }
 
             for (const ei of erp.itens) {
@@ -2668,18 +2669,13 @@ export class IcmsService {
         return { inicio, fim };
     }
 
-    /** Lista NFs lançadas com o status da auditoria, para a aba Conferência Fiscal. */
-    async listAuditorias(f: {
-        q?: string; emitente?: string; escopo?: string;
-        dtInicio?: string; dtFim?: string; page?: string | number; pageSize?: string | number;
-    }) {
+    /** Monta o WHERE + params dos filtros da aba (reuso lista/lote). */
+    private buildAuditoriaFiltro(f: { q?: string; emitente?: string; escopo?: string; dtInicio?: string; dtFim?: string }): { where: string; params: any[] } {
         const { inicio, fim } = this.resolveJanelaEntrada(f.dtInicio, f.dtFim);
         const params: any[] = [];
         const cond: string[] = [`c.status_erp = 'LANCADA'`];
-
         params.push(inicio); cond.push(`c.dt_entrada >= $${params.length}`);
         params.push(fim); cond.push(`c.dt_entrada <= $${params.length}`);
-
         if (f.q && String(f.q).trim()) {
             params.push(`%${String(f.q).trim()}%`);
             const i = params.length;
@@ -2693,11 +2689,44 @@ export class IcmsService {
         const esc = String(f.escopo || 'TODOS').toUpperCase();
         if (esc === 'DENTRO') cond.push(`left(c.chave_nfe, 2) = '51'`);
         else if (esc === 'FORA') cond.push(`left(c.chave_nfe, 2) <> '51'`);
+        return { where: cond.join(' AND '), params };
+    }
 
+    /** Reexecuta a auditoria de TODAS as NFs do período filtrado (sem WhatsApp). */
+    async reconferirPeriodo(f: { q?: string; emitente?: string; escopo?: string; dtInicio?: string; dtFim?: string }) {
+        const { where, params } = this.buildAuditoriaFiltro(f);
+        const chaveRows = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT c.chave_nfe FROM com_nfe_conciliacao c WHERE ${where}
+             ORDER BY c.dt_entrada DESC NULLS LAST LIMIT 2000`,
+            ...params,
+        );
+        const chaves = chaveRows.map((r) => r.chave_nfe);
+        for (const chave of chaves) {
+            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false });
+        }
+        const sumRows = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT auditoria_fiscal_status AS s, count(*)::int AS c
+             FROM com_nfe_conciliacao c WHERE ${where} GROUP BY auditoria_fiscal_status`,
+            ...params,
+        );
+        const by = (s: string) => Number(sumRows.find((r) => r.s === s)?.c ?? 0);
+        return {
+            total: chaves.length,
+            ok: by('OK'),
+            divergente: by('DIVERGENTE'),
+            semConferencia: by('SEM_CONFERENCIA'),
+        };
+    }
+
+    /** Lista NFs lançadas com o status da auditoria, para a aba Conferência Fiscal. */
+    async listAuditorias(f: {
+        q?: string; emitente?: string; escopo?: string;
+        dtInicio?: string; dtFim?: string; page?: string | number; pageSize?: string | number;
+    }) {
+        const { where, params } = this.buildAuditoriaFiltro(f);
         const page = Math.max(1, Number(f.page) || 1);
         const pageSize = Math.min(100, Math.max(1, Number(f.pageSize) || 20));
         const offset = (page - 1) * pageSize;
-        const where = cond.join(' AND ');
 
         const totalRows = await this.prisma.$queryRawUnsafe<any[]>(
             `SELECT count(*)::int AS total FROM com_nfe_conciliacao c WHERE ${where}`,

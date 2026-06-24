@@ -106,6 +106,17 @@ export class IcmsController {
         return this.service.listAuditorias({ q, emitente, escopo, dtInicio, dtFim, page, pageSize });
     }
 
+    @Post('auditoria/reconferir-periodo')
+    async reconferirPeriodo(
+        @Query('q') q?: string,
+        @Query('emitente') emitente?: string,
+        @Query('escopo') escopo?: string,
+        @Query('dtInicio') dtInicio?: string,
+        @Query('dtFim') dtFim?: string,
+    ) {
+        return this.service.reconferirPeriodo({ q, emitente, escopo, dtInicio, dtFim });
+    }
+
     @Get('auditoria/:chaveNfe')
     async getAuditoria(@Param('chaveNfe') chaveNfe: string) {
         const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);

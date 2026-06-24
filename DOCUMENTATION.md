@@ -394,6 +394,12 @@ Contrato do webhook (intranet → n8n):
 * `POST /icms/auditoria/:chaveNfe/reconferir` — **reexecuta a auditoria manualmente
   sem disparar o WhatsApp** (`auditarLancamentoFiscal(chave, { enviarAlerta: false })`)
   e devolve o detalhe atualizado.
+* `POST /icms/auditoria/reconferir-periodo` — reexecuta a auditoria de **todas as NFs
+  do período filtrado** (mesmos query params da lista; sem WhatsApp; teto de 2000).
+  Retorna resumo `{ total, ok, divergente, semConferencia }`.
+
+O `OPF_CODIGO` **apenas determina** a destinação (revenda x uso/consumo) das notas
+intra — não aparece como item de conferência.
 
 Frontend: aba **Conferência Fiscal** na tela de NF de entrada
 (`cotacao-frontend/app/(private)/compras/notaFiscal/notaFiscal/`), componente

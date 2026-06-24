@@ -105,6 +105,12 @@ export declare class IcmsController {
             totalErros: any;
         }[];
     }>;
+    reconferirPeriodo(q?: string, emitente?: string, escopo?: string, dtInicio?: string, dtFim?: string): Promise<{
+        total: number;
+        ok: number;
+        divergente: number;
+        semConferencia: number;
+    }>;
     getAuditoria(chaveNfe: string): Promise<{
         header: {
             status: any;

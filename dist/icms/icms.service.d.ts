@@ -169,6 +169,19 @@ export declare class IcmsService {
     private static readonly CUF_SIGLA;
     private cufToSigla;
     private resolveJanelaEntrada;
+    private buildAuditoriaFiltro;
+    reconferirPeriodo(f: {
+        q?: string;
+        emitente?: string;
+        escopo?: string;
+        dtInicio?: string;
+        dtFim?: string;
+    }): Promise<{
+        total: number;
+        ok: number;
+        divergente: number;
+        semConferencia: number;
+    }>;
     listAuditorias(f: {
         q?: string;
         emitente?: string;

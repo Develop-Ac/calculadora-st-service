@@ -78,6 +78,9 @@ let IcmsController = class IcmsController {
     async listAuditoria(q, emitente, escopo, dtInicio, dtFim, page, pageSize) {
         return this.service.listAuditorias({ q, emitente, escopo, dtInicio, dtFim, page, pageSize });
     }
+    async reconferirPeriodo(q, emitente, escopo, dtInicio, dtFim) {
+        return this.service.reconferirPeriodo({ q, emitente, escopo, dtInicio, dtFim });
+    }
     async getAuditoria(chaveNfe) {
         const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);
         if (!detalhe) {
@@ -250,6 +253,17 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "listAuditoria", null);
+__decorate([
+    (0, common_1.Post)('auditoria/reconferir-periodo'),
+    __param(0, (0, common_1.Query)('q')),
+    __param(1, (0, common_1.Query)('emitente')),
+    __param(2, (0, common_1.Query)('escopo')),
+    __param(3, (0, common_1.Query)('dtInicio')),
+    __param(4, (0, common_1.Query)('dtFim')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String, String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "reconferirPeriodo", null);
 __decorate([
     (0, common_1.Get)('auditoria/:chaveNfe'),
     __param(0, (0, common_1.Param)('chaveNfe')),
