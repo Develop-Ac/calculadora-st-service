@@ -7,6 +7,11 @@ import helmet from 'helmet';
 import * as dotenv from 'dotenv';
 import { AppModule } from './app.module';
 
+// Permite serializar BigInt em respostas JSON (Postgres bigserial/bigint).
+(BigInt.prototype as any).toJSON = function () {
+    return Number(this);
+};
+
 async function bootstrap() {
     Logger.log('Starting bootstrap...', 'Bootstrap');
     try { dotenv.config(); } catch (_) { }

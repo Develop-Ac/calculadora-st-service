@@ -1869,9 +1869,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return this.regraEsperadaDefault(I, D, monofasico);
     }
     async getFiscalRegras() {
-        const regras = await this.prisma.$queryRawUnsafe(`SELECT * FROM com_fiscal_regra ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`);
-        const opf = await this.prisma.$queryRawUnsafe(`SELECT * FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`);
-        const origem = await this.prisma.$queryRawUnsafe(`SELECT * FROM com_fiscal_origem_cst ORDER BY origem_de`);
+        const regras = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, imposto, destinacao, monofasico, cfop_sufixo, cst_final,
+                    st_codigo, pis_codigo, cofins_codigo, subtipo, comercializavel, subgrp_codigo,
+                    ativo, descricao, updated_at
+             FROM com_fiscal_regra
+             ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`);
+        const opf = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, opf_codigo, destinacao, ativo FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`);
+        const origem = await this.prisma.$queryRawUnsafe(`SELECT id::int AS id, origem_de, origem_para, ativo FROM com_fiscal_origem_cst ORDER BY origem_de`);
         return { regras, opf, origem };
     }
     async saveFiscalRegras(body) {

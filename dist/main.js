@@ -43,6 +43,9 @@ const bodyParser = __importStar(require("body-parser"));
 const helmet_1 = __importDefault(require("helmet"));
 const dotenv = __importStar(require("dotenv"));
 const app_module_1 = require("./app.module");
+BigInt.prototype.toJSON = function () {
+    return Number(this);
+};
 async function bootstrap() {
     var _a, _b;
     common_1.Logger.log('Starting bootstrap...', 'Bootstrap');

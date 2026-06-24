@@ -2267,11 +2267,20 @@ export class IcmsService {
 
     /** Retorna todas as regras configuráveis (para a tela de edição). */
     async getFiscalRegras() {
+        // id::int evita "Do not know how to serialize a BigInt" (bigserial -> BigInt).
         const regras = await this.prisma.$queryRawUnsafe<any[]>(
-            `SELECT * FROM com_fiscal_regra ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`,
+            `SELECT id::int AS id, imposto, destinacao, monofasico, cfop_sufixo, cst_final,
+                    st_codigo, pis_codigo, cofins_codigo, subtipo, comercializavel, subgrp_codigo,
+                    ativo, descricao, updated_at
+             FROM com_fiscal_regra
+             ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`,
         );
-        const opf = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`);
-        const origem = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_origem_cst ORDER BY origem_de`);
+        const opf = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT id::int AS id, opf_codigo, destinacao, ativo FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`,
+        );
+        const origem = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT id::int AS id, origem_de, origem_para, ativo FROM com_fiscal_origem_cst ORDER BY origem_de`,
+        );
         return { regras, opf, origem };
     }
 
