@@ -2199,6 +2199,19 @@ export class IcmsService {
         return null;
     }
 
+    /**
+     * PIS/COFINS esperados conforme o SUBTIPO do cadastro e se é monofásico:
+     *   - SUBTIPO 07 ou 08            -> P70 / C70
+     *   - monofásico (e não 07/08)    -> 04 / 04
+     *   - demais (não mono, não 07/08)-> P01 / C01
+     */
+    private pisCofinsEsperado(cadastroSubtipo: any, monofasico: boolean): { pis: string; cofins: string } {
+        const sub = this.digitsOnly(cadastroSubtipo);
+        if (sub === '07' || sub === '08') return { pis: 'P70', cofins: 'C70' };
+        if (monofasico) return { pis: '04', cofins: '04' };
+        return { pis: 'P01', cofins: 'C01' };
+    }
+
     // ---- Regras fiscais configuráveis (com cache) ----
 
     private fiscalRulesCache: { regras: any[]; opf: Map<string, string>; origem: Map<string, string> } | null = null;
@@ -2548,10 +2561,12 @@ export class IcmsService {
                 if (proCodigo && !prod) {
                     checks.push({ campo: 'Cadastro', esperado: null, encontrado: null, ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
                 } else if (prod) {
+                    // PIS/COFINS vêm do SUBTIPO do cadastro (07/08->P70/C70, mono->04, senão P01/C01).
+                    const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
                     const cad: Array<[string, any, any]> = [
                         ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
-                        ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
-                        ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
+                        ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],
+                        ['Cadastro COFINS', pc.cofins, prod.COFINS_CODIGO],
                         ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
                         ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
                         ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],

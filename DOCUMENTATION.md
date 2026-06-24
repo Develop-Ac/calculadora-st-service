@@ -412,9 +412,16 @@ item e botão **Reconferir**.
 Além de CFOP/CST, a auditoria confere o **cadastro** de cada item: pega o
 `PRO_CODIGO` que o ERP lançou em `NFE_ITENS`, consulta `Stage_Produtos` e compara
 `ST_CODIGO` (Situação Tributária: `ST0-X`/`TR0-X`), `PIS_CODIGO`, `COFINS_CODIGO`,
-`SUBTIPO`, `COMERCIALIZAVEL` e `SUBGRP_CODIGO` com o esperado da regra. PIS/COFINS
-variam por NCM monofásico (`04`/`04`) vs normal (`P01`/`C01`); uso/consumo usa
-`P99`/`C99`. (É a mesma conferência da tela de NF, agora também no lançamento.)
+`SUBTIPO`, `COMERCIALIZAVEL` e `SUBGRP_CODIGO` com o esperado da regra.
+
+**PIS/COFINS** não vêm da matriz: são calculados pelo **SUBTIPO do cadastro** +
+monofásico (`pisCofinsEsperado`):
+* SUBTIPO `07` ou `08` → `P70` / `C70`;
+* monofásico (e não 07/08) → `04` / `04`;
+* demais (não monofásico, não 07/08) → `P01` / `C01`.
+
+(As colunas `pis_codigo`/`cofins_codigo` da matriz deixaram de ser usadas nessa
+conferência.)
 
 ### Regras fiscais configuráveis
 
