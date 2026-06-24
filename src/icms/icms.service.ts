@@ -1876,7 +1876,39 @@ export class IcmsService {
             { allowZeroRows: true },
         );
 
-        return rows[0] ?? null;
+        if (rows[0]) return rows[0];
+
+        // Fallback: Stage pode estar desatualizado (ETL). Busca direto no banco
+        // mãe (Firebird PRODUTOS, empresa 1) via linked server CONSULTA.
+        return this.findInternalProductErp(proCodigo);
+    }
+
+    /** Fallback do cadastro do produto direto na PRODUTOS (empresa 1) do ERP. */
+    private async findInternalProductErp(proCodigo: string) {
+        const code = this.digitsOnly(proCodigo);
+        if (!code) return null;
+        const firebirdSql = `
+      SELECT FIRST 1
+          PRO_CODIGO, PRO_DESCRICAO, ST_CODIGO, SUBTIPO,
+          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO
+      FROM PRODUTOS
+      WHERE EMPRESA = 1 AND PRO_CODIGO = ${code}
+    `;
+        try {
+            const rows = await this.openQuery.query<any>(
+                `SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql.replace(/'/g, "''")}')`,
+                {},
+                { timeout: 120000, allowZeroRows: true },
+            );
+            return rows[0] ?? null;
+        } catch (e) {
+            this.logger.error(
+                `Falha no fallback de produto ${code} no banco mãe (PRODUTOS)`,
+                e instanceof Error ? e.stack : String(e),
+                'Auditoria',
+            );
+            return null;
+        }
     }
 
     private isMonofasicoNcm(ncm: string) {
@@ -2559,7 +2591,7 @@ export class IcmsService {
                     checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
                 }
                 if (proCodigo && !prod) {
-                    checks.push({ campo: 'Cadastro', esperado: null, encontrado: null, ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
+                    checks.push({ campo: 'Cadastro', esperado: 'Cadastrado', encontrado: 'Não encontrado', ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
                 } else if (prod) {
                     // PIS/COFINS vêm do SUBTIPO do cadastro (07/08->P70/C70, mono->04, senão P01/C01).
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);

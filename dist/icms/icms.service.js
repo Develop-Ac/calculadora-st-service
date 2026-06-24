@@ -1543,7 +1543,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
     }
     async findInternalProduct(proCodigo) {
-        var _a;
         const rows = await this.openQuery.query(`
             SELECT TOP 1
                 PRO_CODIGO,
@@ -1557,7 +1556,30 @@ let IcmsService = IcmsService_1 = class IcmsService {
             FROM [BI].[dbo].[Stage_Produtos]
             WHERE PRO_CODIGO = @proCodigo
             `, { proCodigo }, { allowZeroRows: true });
-        return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
+        if (rows[0])
+            return rows[0];
+        return this.findInternalProductErp(proCodigo);
+    }
+    async findInternalProductErp(proCodigo) {
+        var _a;
+        const code = this.digitsOnly(proCodigo);
+        if (!code)
+            return null;
+        const firebirdSql = `
+      SELECT FIRST 1
+          PRO_CODIGO, PRO_DESCRICAO, ST_CODIGO, SUBTIPO,
+          PIS_CODIGO, COFINS_CODIGO, COMERCIALIZAVEL, SUBGRP_CODIGO
+      FROM PRODUTOS
+      WHERE EMPRESA = 1 AND PRO_CODIGO = ${code}
+    `;
+        try {
+            const rows = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${firebirdSql.replace(/'/g, "''")}')`, {}, { timeout: 120000, allowZeroRows: true });
+            return (_a = rows[0]) !== null && _a !== void 0 ? _a : null;
+        }
+        catch (e) {
+            this.logger.error(`Falha no fallback de produto ${code} no banco mãe (PRODUTOS)`, e instanceof Error ? e.stack : String(e), 'Auditoria');
+            return null;
+        }
     }
     isMonofasicoNcm(ncm) {
         const ncmClean = this.cleanDigits(ncm);
@@ -2085,7 +2107,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
                 }
                 if (proCodigo && !prod) {
-                    checks.push({ campo: 'Cadastro', esperado: null, encontrado: null, ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
+                    checks.push({ campo: 'Cadastro', esperado: 'Cadastrado', encontrado: 'Não encontrado', ok: false, mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
                 }
                 else if (prod) {
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);

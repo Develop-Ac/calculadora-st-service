@@ -126,6 +126,7 @@ export declare class IcmsService {
     private findSupplierByCpfCnpj;
     private findSupplierProductLink;
     private findInternalProduct;
+    private findInternalProductErp;
     private isMonofasicoNcm;
     private cleanDigits;
     private normalizeComparisonText;

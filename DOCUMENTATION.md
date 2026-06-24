@@ -410,7 +410,9 @@ item e botão **Reconferir**.
 ### Conferência do cadastro do produto
 
 Além de CFOP/CST, a auditoria confere o **cadastro** de cada item: pega o
-`PRO_CODIGO` que o ERP lançou em `NFE_ITENS`, consulta `Stage_Produtos` e compara
+`PRO_CODIGO` que o ERP lançou em `NFE_ITENS`, consulta `Stage_Produtos` (com
+**fallback** na `PRODUTOS` empresa 1 do Firebird via linked server `CONSULTA`,
+caso o Stage esteja desatualizado pelo ETL) e compara
 `ST_CODIGO` (Situação Tributária: `ST0-X`/`TR0-X`), `PIS_CODIGO`, `COFINS_CODIGO`,
 `SUBTIPO`, `COMERCIALIZAVEL` e `SUBGRP_CODIGO` com o esperado da regra.
 
