@@ -86,6 +86,87 @@ export declare class IcmsController {
     persistFiscalConference(body: FiscalConferenceRequestDto): Promise<{
         notas: any[];
     }>;
+    listAuditoria(q?: string, emitente?: string, escopo?: string, dtInicio?: string, dtFim?: string, page?: string, pageSize?: string): Promise<{
+        page: number;
+        pageSize: number;
+        total: any;
+        items: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+            totalErros: any;
+        }[];
+    }>;
+    getAuditoria(chaveNfe: string): Promise<{
+        header: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+        };
+        totalErros: number;
+        divergencias: {
+            nItem: number;
+            escopo: string;
+            campo: any;
+            esperado: any;
+            encontrado: any;
+            mensagem: any;
+        }[];
+    }>;
+    reconferirAuditoria(chaveNfe: string): Promise<{
+        header: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+        };
+        totalErros: number;
+        divergencias: {
+            nItem: number;
+            escopo: string;
+            campo: any;
+            esperado: any;
+            encontrado: any;
+            mensagem: any;
+        }[];
+    }>;
+    getFiscalRegras(): Promise<{
+        regras: any[];
+        opf: any[];
+        origem: any[];
+    }>;
+    saveFiscalRegras(body: {
+        regras?: any[];
+        opf?: any[];
+        origem?: any[];
+    }): Promise<{
+        regras: any[];
+        opf: any[];
+        origem: any[];
+    }>;
     getPaymentStatus(): Promise<Record<string, {
         status: string;
         valor: number;

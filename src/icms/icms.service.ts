@@ -196,6 +196,12 @@ export class IcmsService {
                         );
                     }
 
+                    // Auditoria fiscal do lançamento recém-confirmado (LANCADA).
+                    // Idempotente (só alerta 1x) e tolerante a falha: nunca quebra o sync.
+                    for (const l of lancadas) {
+                        await this.auditarLancamentoFiscal(l.chave);
+                    }
+
                     // EXCLUIDA: saiu da temporária e não foi encontrada na NF_ENTRADA.
                     if (excluidas.length > 0) {
                         await this.prisma.nfeConciliacao.updateMany({
@@ -2129,6 +2135,643 @@ export class IcmsService {
             valorTotal: parseFloat(icmsTot.vNF || 0) || 0,
             itens,
         };
+    }
+
+    // =====================================================================
+    // AUDITORIA FISCAL DO LANÇAMENTO (gatilho: NF vira LANCADA)
+    // =====================================================================
+
+    private digitsOnly(v: any): string {
+        return String(v ?? '').replace(/\D/g, '');
+    }
+
+    /** CFOP de ENTRADA esperado conforme imposto × destinação × (intra/inter). */
+    private cfopEntradaEsperado(imposto: string, destinacao: string, intra: boolean): string | null {
+        const p = intra ? '1' : '2';
+        const I = String(imposto || '').toUpperCase();
+        const D = String(destinacao || '').toUpperCase();
+        if (I === 'ST' && D === 'COMERCIALIZACAO') return p + '403';
+        if (I === 'ST' && D === 'USO_CONSUMO') return p + '407';
+        if (I === 'TRIBUTADA' && D === 'COMERCIALIZACAO') return p + '102';
+        if (D === 'USO_CONSUMO' && (I === 'TRIBUTADA' || I === 'DIFAL')) return p + '556';
+        if (I === 'DIFAL') return p + '556';
+        return null;
+    }
+
+    /** Final (2 dígitos) do CST esperado na ENTRADA. */
+    private cstFinalEsperado(imposto: string, destinacao: string): string | null {
+        const I = String(imposto || '').toUpperCase();
+        const D = String(destinacao || '').toUpperCase();
+        // Na ENTRADA, mercadoria com ST chega com o imposto já retido pelo
+        // fornecedor (substituto) → CST final 60, seja revenda ou uso/consumo.
+        // (O final 10 é de saída, quando o substituto cobra o ST na venda.)
+        if (I === 'ST') return '60';
+        if (I === 'TRIBUTADA' && D === 'COMERCIALIZACAO') return '00';
+        if (D === 'USO_CONSUMO' && (I === 'TRIBUTADA' || I === 'DIFAL')) return '90';
+        if (I === 'DIFAL') return '90';
+        return null;
+    }
+
+    /** Origem esperada do CST: fornecedor importou direto, mas adquirimos no
+     *  mercado interno → converte 1→2 e 6→7. Demais origens permanecem. */
+    private origemEsperada(origemNota: string): string {
+        if (origemNota === '1') return '2';
+        if (origemNota === '6') return '7';
+        return origemNota;
+    }
+
+    /** Sem conferência na tela: deduz imposto/destinação pelo CFOP lançado. */
+    private classificacaoPorCfop(cfopDigits: string): { imposto: string; destinacao: string } | null {
+        const suf = cfopDigits.slice(1); // remove o 1º dígito (1/2/3)
+        if (suf === '102') return { imposto: 'TRIBUTADA', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '403') return { imposto: 'ST', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '407') return { imposto: 'ST', destinacao: 'USO_CONSUMO' };
+        if (suf === '556') return { imposto: 'TRIBUTADA', destinacao: 'USO_CONSUMO' };
+        return null;
+    }
+
+    /** Notas DENTRO do estado: a destinação vem do OPF_CODIGO da NF_ENTRADA.
+     *  1 ou 40 = compra (comercialização); 10 = uso/consumo. */
+    private destinacaoPorOpf(opfCodigo: any): 'COMERCIALIZACAO' | 'USO_CONSUMO' | null {
+        const code = this.digitsOnly(opfCodigo);
+        if (code === '1' || code === '40') return 'COMERCIALIZACAO';
+        if (code === '10') return 'USO_CONSUMO';
+        return null;
+    }
+
+    // ---- Regras fiscais configuráveis (com cache) ----
+
+    private fiscalRulesCache: { regras: any[]; opf: Map<string, string>; origem: Map<string, string> } | null = null;
+
+    private invalidateFiscalRules() {
+        this.fiscalRulesCache = null;
+    }
+
+    private async getFiscalRules() {
+        if (this.fiscalRulesCache) return this.fiscalRulesCache;
+        try {
+            const regras = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_regra WHERE ativo = true`);
+            const opfRows = await this.prisma.$queryRawUnsafe<any[]>(`SELECT opf_codigo, destinacao FROM com_fiscal_opf_destinacao WHERE ativo = true`);
+            const origemRows = await this.prisma.$queryRawUnsafe<any[]>(`SELECT origem_de, origem_para FROM com_fiscal_origem_cst WHERE ativo = true`);
+            this.fiscalRulesCache = {
+                regras: regras ?? [],
+                opf: new Map((opfRows ?? []).map((r) => [this.digitsOnly(r.opf_codigo), String(r.destinacao)])),
+                origem: new Map((origemRows ?? []).map((r) => [String(r.origem_de), String(r.origem_para)])),
+            };
+        } catch {
+            // Tabelas ainda não criadas → usa os defaults embutidos no código.
+            this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map() };
+        }
+        return this.fiscalRulesCache;
+    }
+
+    /** Valores esperados (defaults embutidos), usados quando a tabela está vazia. */
+    private regraEsperadaDefault(imposto: string, destinacao: string, monofasico: boolean) {
+        const I = String(imposto).toUpperCase();
+        const D = String(destinacao).toUpperCase();
+        const pisCom = monofasico ? '04' : 'P01';
+        const cofinsCom = monofasico ? '04' : 'C01';
+        if (I === 'ST' && D === 'COMERCIALIZACAO') return { cfopSufixo: '403', cstFinal: '60', stCodigo: 'ST0-X', pis: pisCom, cofins: cofinsCom, subtipo: '00', comercializavel: null as string | null, subgrp: null as string | null };
+        if (I === 'ST' && D === 'USO_CONSUMO') return { cfopSufixo: '407', cstFinal: '60', stCodigo: 'ST0-X', pis: 'P99', cofins: 'C99', subtipo: '07', comercializavel: 'N' as string | null, subgrp: '274' as string | null };
+        if (I === 'TRIBUTADA' && D === 'COMERCIALIZACAO') return { cfopSufixo: '102', cstFinal: '00', stCodigo: 'TR0-X', pis: pisCom, cofins: cofinsCom, subtipo: '00', comercializavel: null as string | null, subgrp: null as string | null };
+        if (D === 'USO_CONSUMO') return { cfopSufixo: '556', cstFinal: '90', stCodigo: 'TR0-X', pis: 'P99', cofins: 'C99', subtipo: '07', comercializavel: 'N' as string | null, subgrp: '274' as string | null };
+        return { cfopSufixo: null as string | null, cstFinal: null as string | null, stCodigo: null as string | null, pis: null as string | null, cofins: null as string | null, subtipo: null as string | null, comercializavel: null as string | null, subgrp: null as string | null };
+    }
+
+    /** Valores esperados para um item, a partir das regras (com fallback ao default). */
+    private regraEsperada(rules: { regras: any[] }, imposto: string, destinacao: string, monofasico: boolean) {
+        // DIFAL ≡ Tributada uso/consumo.
+        const ehDifal = String(imposto).toUpperCase() === 'DIFAL';
+        const I = ehDifal ? 'TRIBUTADA' : String(imposto).toUpperCase();
+        const D = ehDifal ? 'USO_CONSUMO' : String(destinacao).toUpperCase();
+        const row = (rules.regras ?? []).find(
+            (r) =>
+                String(r.imposto).toUpperCase() === I &&
+                String(r.destinacao).toUpperCase() === D &&
+                (r.monofasico === null || r.monofasico === undefined || Boolean(r.monofasico) === monofasico),
+        );
+        if (row) {
+            return {
+                cfopSufixo: row.cfop_sufixo ?? null,
+                cstFinal: row.cst_final ?? null,
+                stCodigo: row.st_codigo ?? null,
+                pis: row.pis_codigo ?? null,
+                cofins: row.cofins_codigo ?? null,
+                subtipo: row.subtipo ?? null,
+                comercializavel: row.comercializavel ?? null,
+                subgrp: row.subgrp_codigo ?? null,
+            };
+        }
+        return this.regraEsperadaDefault(I, D, monofasico);
+    }
+
+    /** Retorna todas as regras configuráveis (para a tela de edição). */
+    async getFiscalRegras() {
+        const regras = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT * FROM com_fiscal_regra ORDER BY imposto, destinacao, monofasico NULLS FIRST, id`,
+        );
+        const opf = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_opf_destinacao ORDER BY opf_codigo`);
+        const origem = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_origem_cst ORDER BY origem_de`);
+        return { regras, opf, origem };
+    }
+
+    /** Substitui todas as regras (full replace, atômico) e invalida o cache. */
+    async saveFiscalRegras(body: { regras?: any[]; opf?: any[]; origem?: any[] }) {
+        const ops: any[] = [
+            this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_regra`),
+            this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_opf_destinacao`),
+            this.prisma.$executeRawUnsafe(`DELETE FROM com_fiscal_origem_cst`),
+        ];
+        const orNull = (v: any) => (v === undefined || v === '' ? null : v);
+        for (const r of body.regras ?? []) {
+            ops.push(
+                this.prisma.$executeRawUnsafe(
+                    `INSERT INTO com_fiscal_regra
+                       (imposto, destinacao, monofasico, cfop_sufixo, cst_final, st_codigo, pis_codigo, cofins_codigo, subtipo, comercializavel, subgrp_codigo, ativo, descricao)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+                    String(r.imposto || '').toUpperCase(),
+                    String(r.destinacao || '').toUpperCase(),
+                    r.monofasico === null || r.monofasico === undefined ? null : Boolean(r.monofasico),
+                    orNull(r.cfop_sufixo), orNull(r.cst_final), orNull(r.st_codigo), orNull(r.pis_codigo),
+                    orNull(r.cofins_codigo), orNull(r.subtipo), orNull(r.comercializavel), orNull(r.subgrp_codigo),
+                    r.ativo !== false, orNull(r.descricao),
+                ),
+            );
+        }
+        for (const o of body.opf ?? []) {
+            if (!String(o.opf_codigo ?? '').trim()) continue;
+            ops.push(
+                this.prisma.$executeRawUnsafe(
+                    `INSERT INTO com_fiscal_opf_destinacao (opf_codigo, destinacao, ativo) VALUES ($1,$2,$3)`,
+                    String(o.opf_codigo).trim(), String(o.destinacao || '').toUpperCase(), o.ativo !== false,
+                ),
+            );
+        }
+        for (const o of body.origem ?? []) {
+            if (!String(o.origem_de ?? '').trim()) continue;
+            ops.push(
+                this.prisma.$executeRawUnsafe(
+                    `INSERT INTO com_fiscal_origem_cst (origem_de, origem_para, ativo) VALUES ($1,$2,$3)`,
+                    String(o.origem_de).trim(), String(o.origem_para || '').trim(), o.ativo !== false,
+                ),
+            );
+        }
+        await this.prisma.$transaction(ops);
+        this.invalidateFiscalRules();
+        return this.getFiscalRegras();
+    }
+
+    /** Cabeçalho + itens (origem/CST/ST) da nota, para a auditoria. */
+    private async parseNotaParaAuditoria(xmlContent: string): Promise<{
+        chave: string;
+        numero: string | null;
+        serie: string | null;
+        modelo: string | null;
+        dataEmissao: string | null;
+        cnpjEmitente: string | null;
+        ufEmitente: string | null;
+        emitente: string | null;
+        valorTotal: number;
+        itens: Array<{ nItem: number; ncm: string | null; origemNota: string; cstFinalNota: string; stDestacado: number }>;
+    } | null> {
+        const xmlStr = await this.decodeXml(xmlContent);
+        if (!xmlStr) return null;
+        const parser = new xml2js.Parser({ explicitArray: false });
+        const result = await parser.parseStringPromise(xmlStr);
+        const nfe = result.nfeProc ? result.nfeProc.NFe : result.NFe;
+        if (!nfe || !nfe.infNFe || !nfe.infNFe.det) return null;
+
+        const infNfe = nfe.infNFe;
+        const emit = infNfe.emit || {};
+        const ide = infNfe.ide || {};
+        const icmsTot = infNfe.total?.ICMSTot || {};
+        const chave = String(infNfe['$']?.Id || '').replace('NFe', '');
+        const det = Array.isArray(infNfe.det) ? infNfe.det : [infNfe.det];
+
+        const itens = det.map((item: any, idx: number) => {
+            const prod = item.prod || {};
+            const imposto = item.imposto || {};
+            let origem = '';
+            let cstFinal = '';
+            let stDestacado = 0;
+            for (const key of Object.keys(imposto.ICMS || {})) {
+                const vals = imposto.ICMS[key] || {};
+                if (vals.orig != null) origem = String(vals.orig);
+                const cst = String(vals.CST ?? vals.CSOSN ?? '');
+                if (cst) cstFinal = cst.slice(-2);
+                if (vals.vICMSST != null) stDestacado = parseFloat(vals.vICMSST) || 0;
+            }
+            const nItem = parseInt(item['$']?.nItem ?? '', 10);
+            return {
+                nItem: Number.isFinite(nItem) ? nItem : idx + 1,
+                ncm: prod.NCM ?? null,
+                origemNota: origem,
+                cstFinalNota: cstFinal,
+                stDestacado,
+            };
+        });
+
+        return {
+            chave,
+            numero: ide.nNF ?? null,
+            serie: ide.serie ?? null,
+            modelo: ide.mod ?? null,
+            dataEmissao: ide.dhEmi ?? ide.dEmi ?? null,
+            cnpjEmitente: emit.CNPJ ?? emit.CPF ?? null,
+            ufEmitente: emit.enderEmit?.UF ?? null,
+            emitente: emit.xNome ?? null,
+            valorTotal: parseFloat(icmsTot.vNF || 0) || 0,
+            itens,
+        };
+    }
+
+    /** Busca o lançamento real no ERP (Firebird): cabeçalho NF_ENTRADA + itens NFE_ITENS. */
+    private async fetchLancamentoErp(chaveNfe: string): Promise<{
+        header: any;
+        itens: any[];
+    } | null> {
+        const safeChave = String(chaveNfe).replace(/'/g, "''");
+        const headSql = `
+      SELECT FIRST 1 NFE, NOTA_FISCAL, SERIE, MODELO_NOTA, FOR_CODIGO, CHAVE_NFE,
+             TOTAL_NOTA, DT_EMISSAO, DT_ENTRADA, OPF_CODIGO
+      FROM NF_ENTRADA
+      WHERE EMPRESA = 1 AND CHAVE_NFE = '${safeChave}'
+    `;
+        const headRows = await this.openQuery.query<any>(
+            `SELECT * FROM OPENQUERY(CONSULTA, '${headSql.replace(/'/g, "''")}')`,
+            {},
+            { timeout: 300000, allowZeroRows: true },
+        );
+        const header = headRows[0];
+        if (!header) return null;
+
+        const itemSql = `
+      SELECT ITEM, PRO_CODIGO, CFOP, CFOP_NOTA, CST, CST_FISCAL, ALIQ_ICMS, ST_VALOR
+      FROM NFE_ITENS
+      WHERE EMPRESA = 1 AND NFE = ${Number(header.NFE)}
+      ORDER BY ITEM
+    `;
+        const itens = await this.openQuery.query<any>(
+            `SELECT * FROM OPENQUERY(CONSULTA, '${itemSql.replace(/'/g, "''")}')`,
+            {},
+            { timeout: 300000, allowZeroRows: true },
+        );
+        return { header, itens };
+    }
+
+    /**
+     * Audita o lançamento fiscal de uma NF que acabou de virar LANCADA:
+     * cruza a nota (XML), a conferência da tela e o lançamento no ERP.
+     * Persiste o resultado e, havendo erro, alerta o grupo via n8n/WAHA.
+     * Nunca lança (try/catch); alerta no máximo 1x por NF.
+     */
+    private async auditarLancamentoFiscal(chaveNfe: string, opts: { enviarAlerta?: boolean } = {}): Promise<void> {
+        const enviarAlerta = opts.enviarAlerta !== false;
+        try {
+            const nfeRow: any = await this.prisma.nfeConciliacao.findUnique({
+                where: { chave_nfe: chaveNfe },
+                select: { xml_completo: true, auditoria_alerta_em: true },
+            });
+            if (!nfeRow) return;
+
+            const xml = await this.normalizeBlobXml(nfeRow.xml_completo);
+            if (this.detectXmlType(xml) !== 'COMPLETO') return; // sem itens, não dá pra auditar
+
+            const nota = await this.parseNotaParaAuditoria(xml);
+            if (!nota) return;
+
+            const erp = await this.fetchLancamentoErp(chaveNfe);
+            if (!erp) return; // não localizado na NF_ENTRADA (não deveria ocorrer aqui)
+
+            const conf = await this.prisma.$queryRawUnsafe<any[]>(
+                `SELECT n_item, pro_codigo, imposto_escolhido, destinacao_mercadoria
+                 FROM com_nfe_conciliacao_item WHERE chave_nfe = $1`,
+                chaveNfe,
+            );
+            const confByItem = new Map<number, any>();
+            for (const c of conf) confByItem.set(Number(c.n_item), c);
+            const semConferencia = conf.length === 0;
+
+            const intra = this.isWithinMtByChave(chaveNfe);
+            const erros: Array<{
+                escopo: 'CABECALHO' | 'ITEM';
+                nItem?: number;
+                proCodigo?: string;
+                campo: string;
+                esperado?: string;
+                encontrado?: string;
+                mensagem: string;
+            }> = [];
+
+            // ---- Cabeçalho (NF_ENTRADA × nota) ----
+            const h = erp.header;
+            const cmp = (campo: string, esperado: any, encontrado: any, norm = (x: any) => String(x ?? '').trim()) => {
+                if (norm(esperado) !== norm(encontrado)) {
+                    erros.push({ escopo: 'CABECALHO', campo, esperado: String(esperado ?? ''), encontrado: String(encontrado ?? ''), mensagem: `${campo} divergente` });
+                }
+            };
+            cmp('Número', nota.numero, h.NOTA_FISCAL, (x) => this.digitsOnly(x));
+            cmp('Série', nota.serie, h.SERIE, (x) => this.digitsOnly(x));
+            cmp('Modelo', nota.modelo, h.MODELO_NOTA, (x) => this.digitsOnly(x));
+            cmp('Chave', nota.chave, h.CHAVE_NFE, (x) => this.digitsOnly(x));
+            const cnpjChave = this.digitsOnly(h.CHAVE_NFE).slice(6, 20);
+            cmp('CNPJ emitente', this.digitsOnly(nota.cnpjEmitente), cnpjChave);
+            const dEmiNota = (nota.dataEmissao || '').slice(0, 10);
+            const dEmiErp = h.DT_EMISSAO ? new Date(h.DT_EMISSAO).toISOString().slice(0, 10) : '';
+            if (dEmiNota && dEmiErp && dEmiNota !== dEmiErp) {
+                erros.push({ escopo: 'CABECALHO', campo: 'Emissão', esperado: dEmiNota, encontrado: dEmiErp, mensagem: 'Data de emissão divergente' });
+            }
+            if (Math.abs((Number(h.TOTAL_NOTA) || 0) - nota.valorTotal) > 0.01) {
+                erros.push({ escopo: 'CABECALHO', campo: 'Valor total', esperado: nota.valorTotal.toFixed(2), encontrado: Number(h.TOTAL_NOTA || 0).toFixed(2), mensagem: 'Valor total divergente' });
+            }
+
+            // ---- Itens (apenas NF-e modelo 55) ----
+            if (this.digitsOnly(h.MODELO_NOTA) === '55') {
+                const rules = await this.getFiscalRules();
+                const notaByItem = new Map<number, any>();
+                for (const it of nota.itens) notaByItem.set(it.nItem, it);
+
+                // Notas DENTRO do estado: a destinação (revenda x uso/consumo) é
+                // determinada pelo OPF_CODIGO da nota, não pela tela nem pelo CFOP.
+                let destinacaoIntra: 'COMERCIALIZACAO' | 'USO_CONSUMO' | null = null;
+                if (intra) {
+                    const destOpf = rules.opf.get(this.digitsOnly(h.OPF_CODIGO)) ?? this.destinacaoPorOpf(h.OPF_CODIGO);
+                    destinacaoIntra = destOpf === 'COMERCIALIZACAO' || destOpf === 'USO_CONSUMO' ? destOpf : null;
+                    if (!destinacaoIntra) {
+                        erros.push({ escopo: 'CABECALHO', campo: 'OPF', encontrado: String(h.OPF_CODIGO ?? ''), mensagem: `OPF_CODIGO ${h.OPF_CODIGO ?? ''} não reconhecido (esperado 1/40=compra, 10=uso/consumo)` });
+                    }
+                }
+
+                for (const ei of erp.itens) {
+                    const nItem = Number(ei.ITEM);
+                    const proCodigo = String(ei.PRO_CODIGO ?? '');
+                    const cfopLanc = this.digitsOnly(ei.CFOP);
+                    const cstFiscalLanc = this.digitsOnly(ei.CST_FISCAL).padStart(3, '0');
+                    const notaItem = notaByItem.get(nItem);
+                    const cItem = confByItem.get(nItem);
+
+                    let imposto: string | undefined;
+                    let destinacao: string | undefined;
+                    if (cItem) {
+                        imposto = cItem.imposto_escolhido;
+                        destinacao = cItem.destinacao_mercadoria;
+                    } else {
+                        const inferido = this.classificacaoPorCfop(cfopLanc);
+                        if (!inferido) {
+                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', encontrado: cfopLanc, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
+                            continue;
+                        }
+                        imposto = inferido.imposto;
+                        destinacao = inferido.destinacao;
+                    }
+
+                    // Dentro do estado, o OPF_CODIGO manda na destinação.
+                    if (intra && destinacaoIntra) destinacao = destinacaoIntra;
+
+                    const monofasico = this.isMonofasicoNcm(this.cleanDigits(notaItem?.ncm ?? ''));
+                    const reg = this.regraEsperada(rules, imposto!, destinacao!, monofasico);
+                    const cfopExp = reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null;
+                    const cstFinalExp = reg.cstFinal;
+
+                    if (cfopExp && cfopLanc && cfopLanc !== cfopExp) {
+                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc, mensagem: `CFOP esperado ${cfopExp}, lançado ${cfopLanc}` });
+                    }
+                    if (cstFinalExp && cstFiscalLanc && cstFiscalLanc.slice(-2) !== cstFinalExp) {
+                        erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST final', esperado: cstFinalExp, encontrado: cstFiscalLanc.slice(-2), mensagem: `CST final esperado ${cstFinalExp}, lançado ${cstFiscalLanc.slice(-2)}` });
+                    }
+                    if (notaItem?.origemNota && cstFiscalLanc.length === 3) {
+                        const origemExp = rules.origem.get(notaItem.origemNota) ?? this.origemEsperada(notaItem.origemNota);
+                        if (cstFiscalLanc.slice(0, 1) !== origemExp) {
+                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'CST origem', esperado: origemExp, encontrado: cstFiscalLanc.slice(0, 1), mensagem: `Origem do CST esperada ${origemExp}, lançada ${cstFiscalLanc.slice(0, 1)}` });
+                        }
+                    }
+
+                    // Conferência do cadastro do produto (Stage_Produtos pelo PRO_CODIGO lançado)
+                    if (proCodigo) {
+                        const prod = await this.findInternalProduct(proCodigo);
+                        if (!prod) {
+                            erros.push({ escopo: 'ITEM', nItem, proCodigo, campo: 'Cadastro', mensagem: `Produto ${proCodigo} não encontrado no cadastro (Stage_Produtos)` });
+                        } else {
+                            const checks: Array<[string, any, any]> = [
+                                ['Cadastro ST_CODIGO', reg.stCodigo, prod.ST_CODIGO],
+                                ['Cadastro PIS', reg.pis, prod.PIS_CODIGO],
+                                ['Cadastro COFINS', reg.cofins, prod.COFINS_CODIGO],
+                                ['Cadastro SUBTIPO', reg.subtipo, prod.SUBTIPO],
+                                ['Cadastro COMERCIALIZAVEL', reg.comercializavel, prod.COMERCIALIZAVEL],
+                                ['Cadastro SUBGRP', reg.subgrp, prod.SUBGRP_CODIGO],
+                            ];
+                            for (const [campo, esp, enc] of checks) {
+                                if (esp == null || String(esp).trim() === '') continue;
+                                if (String(enc ?? '').trim().toUpperCase() !== String(esp).trim().toUpperCase()) {
+                                    erros.push({ escopo: 'ITEM', nItem, proCodigo, campo, esperado: String(esp), encontrado: String(enc ?? '') || 'vazio', mensagem: `${campo}: esperado ${esp}, cadastrado ${String(enc ?? '') || 'vazio'}` });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            const status = semConferencia ? 'SEM_CONFERENCIA' : erros.length > 0 ? 'DIVERGENTE' : 'OK';
+
+            // ---- Persistência do resultado ----
+            await this.prisma.nfeConciliacao.update({
+                where: { chave_nfe: chaveNfe },
+                data: { auditoria_fiscal_em: new Date(), auditoria_fiscal_status: status },
+            });
+            await this.prisma.$executeRawUnsafe(`DELETE FROM com_nfe_auditoria_item WHERE chave_nfe = $1`, chaveNfe);
+            for (const e of erros) {
+                await this.prisma.$executeRawUnsafe(
+                    `INSERT INTO com_nfe_auditoria_item (chave_nfe, n_item, campo, esperado, encontrado, mensagem)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT (chave_nfe, n_item, campo) DO UPDATE
+                       SET esperado = EXCLUDED.esperado, encontrado = EXCLUDED.encontrado, mensagem = EXCLUDED.mensagem`,
+                    chaveNfe, e.nItem ?? 0, e.campo, e.esperado ?? null, e.encontrado ?? null, e.mensagem,
+                );
+            }
+
+            // ---- Alerta (1x por NF, só se houver erro; reconferência manual não alerta) ----
+            if (enviarAlerta && erros.length > 0 && !nfeRow.auditoria_alerta_em) {
+                const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
+                if (!webhook) {
+                    this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
+                } else {
+                    const payload = {
+                        chaveNfe,
+                        numeroNf: nota.numero,
+                        serie: nota.serie,
+                        emitente: nota.emitente,
+                        ufEmitente: nota.ufEmitente,
+                        dtEntrada: h.DT_ENTRADA ? new Date(h.DT_ENTRADA).toISOString().slice(0, 10) : null,
+                        statusAuditoria: status,
+                        totalErros: erros.length,
+                        erros,
+                    };
+                    const resp = await fetch(webhook, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    if (resp.ok) {
+                        await this.prisma.nfeConciliacao.update({
+                            where: { chave_nfe: chaveNfe },
+                            data: { auditoria_alerta_em: new Date() },
+                        });
+                        this.logger.log(`Alerta de auditoria enviado para ${chaveNfe} (${erros.length} erro(s)).`, 'Auditoria');
+                    } else {
+                        this.logger.error(`n8n recusou alerta de auditoria ${chaveNfe}: HTTP ${resp.status}.`, undefined, 'Auditoria');
+                    }
+                }
+            }
+        } catch (e) {
+            this.logger.error(
+                `Falha ao auditar lançamento ${chaveNfe}`,
+                e instanceof Error ? e.stack : String(e),
+                'Auditoria',
+            );
+        }
+    }
+
+    // ---- Consulta da aba "Conferência Fiscal" ----
+
+    private static readonly CUF_SIGLA: Record<string, string> = {
+        '11': 'RO', '12': 'AC', '13': 'AM', '14': 'RR', '15': 'PA', '16': 'AP', '17': 'TO',
+        '21': 'MA', '22': 'PI', '23': 'CE', '24': 'RN', '25': 'PB', '26': 'PE', '27': 'AL', '28': 'SE', '29': 'BA',
+        '31': 'MG', '32': 'ES', '33': 'RJ', '35': 'SP', '41': 'PR', '42': 'SC', '43': 'RS',
+        '50': 'MS', '51': 'MT', '52': 'GO', '53': 'DF',
+    };
+    private cufToSigla(cuf: string): string {
+        return IcmsService.CUF_SIGLA[String(cuf ?? '')] ?? String(cuf ?? '');
+    }
+
+    /** Janela de data de entrada: default = mês corrente. */
+    private resolveJanelaEntrada(dtInicio?: string, dtFim?: string): { inicio: Date; fim: Date } {
+        const now = new Date();
+        const inicio = dtInicio
+            ? new Date(`${dtInicio}T00:00:00`)
+            : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+        const fim = dtFim
+            ? new Date(`${dtFim}T23:59:59.999`)
+            : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        return { inicio, fim };
+    }
+
+    /** Lista NFs lançadas com o status da auditoria, para a aba Conferência Fiscal. */
+    async listAuditorias(f: {
+        q?: string; emitente?: string; escopo?: string;
+        dtInicio?: string; dtFim?: string; page?: string | number; pageSize?: string | number;
+    }) {
+        const { inicio, fim } = this.resolveJanelaEntrada(f.dtInicio, f.dtFim);
+        const params: any[] = [];
+        const cond: string[] = [`c.status_erp = 'LANCADA'`];
+
+        params.push(inicio); cond.push(`c.dt_entrada >= $${params.length}`);
+        params.push(fim); cond.push(`c.dt_entrada <= $${params.length}`);
+
+        if (f.q && String(f.q).trim()) {
+            params.push(`%${String(f.q).trim()}%`);
+            const i = params.length;
+            cond.push(`(c.chave_nfe ILIKE $${i} OR substring(c.chave_nfe from 26 for 9) ILIKE $${i})`);
+        }
+        if (f.emitente && String(f.emitente).trim()) {
+            params.push(`%${String(f.emitente).trim()}%`);
+            const i = params.length;
+            cond.push(`(c.emitente ILIKE $${i} OR c.cnpj_emitente ILIKE $${i} OR substring(c.chave_nfe from 7 for 14) ILIKE $${i})`);
+        }
+        const esc = String(f.escopo || 'TODOS').toUpperCase();
+        if (esc === 'DENTRO') cond.push(`left(c.chave_nfe, 2) = '51'`);
+        else if (esc === 'FORA') cond.push(`left(c.chave_nfe, 2) <> '51'`);
+
+        const page = Math.max(1, Number(f.page) || 1);
+        const pageSize = Math.min(100, Math.max(1, Number(f.pageSize) || 20));
+        const offset = (page - 1) * pageSize;
+        const where = cond.join(' AND ');
+
+        const totalRows = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT count(*)::int AS total FROM com_nfe_conciliacao c WHERE ${where}`,
+            ...params,
+        );
+        const total = totalRows[0]?.total ?? 0;
+
+        const rows = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT c.chave_nfe, c.emitente, c.cnpj_emitente, c.data_emissao, c.dt_entrada,
+                    c.valor_total, c.auditoria_fiscal_status, c.auditoria_fiscal_em,
+                    substring(c.chave_nfe from 26 for 9) AS numero,
+                    left(c.chave_nfe, 2) AS cuf,
+                    (SELECT count(*)::int FROM com_nfe_auditoria_item a WHERE a.chave_nfe = c.chave_nfe) AS total_erros
+             FROM com_nfe_conciliacao c
+             WHERE ${where}
+             ORDER BY c.dt_entrada DESC NULLS LAST, c.data_emissao DESC
+             LIMIT ${pageSize} OFFSET ${offset}`,
+            ...params,
+        );
+
+        return {
+            page, pageSize, total,
+            items: rows.map((r) => ({
+                chaveNfe: r.chave_nfe,
+                numero: String(Number(r.numero ?? '0')),
+                emitente: r.emitente,
+                cnpj: r.cnpj_emitente,
+                uf: this.cufToSigla(r.cuf),
+                dentroEstado: r.cuf === '51',
+                dataEmissao: r.data_emissao,
+                dtEntrada: r.dt_entrada,
+                valorTotal: Number(r.valor_total || 0),
+                status: r.auditoria_fiscal_status ?? 'PENDENTE',
+                auditadoEm: r.auditoria_fiscal_em,
+                totalErros: r.total_erros ?? 0,
+            })),
+        };
+    }
+
+    /** Detalhe de uma NF: cabeçalho + divergências item a item. */
+    async getAuditoriaDetalhe(chaveNfe: string) {
+        const rows = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
+                    auditoria_fiscal_status, auditoria_fiscal_em,
+                    substring(chave_nfe from 26 for 9) AS numero, left(chave_nfe, 2) AS cuf
+             FROM com_nfe_conciliacao WHERE chave_nfe = $1`,
+            chaveNfe,
+        );
+        const h = rows[0];
+        if (!h) return null;
+
+        const divs = await this.prisma.$queryRawUnsafe<any[]>(
+            `SELECT n_item, campo, esperado, encontrado, mensagem
+             FROM com_nfe_auditoria_item WHERE chave_nfe = $1 ORDER BY n_item, campo`,
+            chaveNfe,
+        );
+
+        return {
+            header: {
+                chaveNfe: h.chave_nfe,
+                numero: String(Number(h.numero ?? '0')),
+                emitente: h.emitente,
+                cnpj: h.cnpj_emitente,
+                uf: this.cufToSigla(h.cuf),
+                dentroEstado: h.cuf === '51',
+                dataEmissao: h.data_emissao,
+                dtEntrada: h.dt_entrada,
+                valorTotal: Number(h.valor_total || 0),
+                status: h.auditoria_fiscal_status ?? 'PENDENTE',
+                auditadoEm: h.auditoria_fiscal_em,
+            },
+            totalErros: divs.length,
+            divergencias: divs.map((d) => ({
+                nItem: Number(d.n_item),
+                escopo: Number(d.n_item) === 0 ? 'CABECALHO' : 'ITEM',
+                campo: d.campo,
+                esperado: d.esperado,
+                encontrado: d.encontrado,
+                mensagem: d.mensagem,
+            })),
+        };
+    }
+
+    /** Reexecuta a auditoria manualmente (sem disparar o WhatsApp) e devolve o detalhe. */
+    async reconferirAuditoria(chaveNfe: string) {
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
+        return this.getAuditoriaDetalhe(chaveNfe);
     }
 
     async savePaymentStatus(dto: {

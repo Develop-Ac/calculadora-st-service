@@ -75,6 +75,29 @@ let IcmsController = class IcmsController {
     async persistFiscalConference(body) {
         return this.service.persistFiscalConference(body);
     }
+    async listAuditoria(q, emitente, escopo, dtInicio, dtFim, page, pageSize) {
+        return this.service.listAuditorias({ q, emitente, escopo, dtInicio, dtFim, page, pageSize });
+    }
+    async getAuditoria(chaveNfe) {
+        const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);
+        if (!detalhe) {
+            throw new common_1.NotFoundException(`Auditoria não encontrada para a NF: ${chaveNfe}`);
+        }
+        return detalhe;
+    }
+    async reconferirAuditoria(chaveNfe) {
+        const detalhe = await this.service.reconferirAuditoria(chaveNfe);
+        if (!detalhe) {
+            throw new common_1.NotFoundException(`NF não encontrada para reconferir: ${chaveNfe}`);
+        }
+        return detalhe;
+    }
+    async getFiscalRegras() {
+        return this.service.getFiscalRegras();
+    }
+    async saveFiscalRegras(body) {
+        return this.service.saveFiscalRegras(body || {});
+    }
     async getPaymentStatus() {
         return this.service.getPaymentStatusMap();
     }
@@ -214,6 +237,46 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "persistFiscalConference", null);
+__decorate([
+    (0, common_1.Get)('auditoria'),
+    __param(0, (0, common_1.Query)('q')),
+    __param(1, (0, common_1.Query)('emitente')),
+    __param(2, (0, common_1.Query)('escopo')),
+    __param(3, (0, common_1.Query)('dtInicio')),
+    __param(4, (0, common_1.Query)('dtFim')),
+    __param(5, (0, common_1.Query)('page')),
+    __param(6, (0, common_1.Query)('pageSize')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String, String, String, String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "listAuditoria", null);
+__decorate([
+    (0, common_1.Get)('auditoria/:chaveNfe'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getAuditoria", null);
+__decorate([
+    (0, common_1.Post)('auditoria/:chaveNfe/reconferir'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "reconferirAuditoria", null);
+__decorate([
+    (0, common_1.Get)('fiscal-regras'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "getFiscalRegras", null);
+__decorate([
+    (0, common_1.Put)('fiscal-regras'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "saveFiscalRegras", null);
 __decorate([
     (0, common_1.Get)('payment-status'),
     __metadata("design:type", Function),

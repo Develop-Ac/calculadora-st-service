@@ -136,6 +136,112 @@ export declare class IcmsService {
     private static readonly MVA_LIMIAR;
     private maybeAlertMva;
     private extractMvaFromXml;
+    private digitsOnly;
+    private cfopEntradaEsperado;
+    private cstFinalEsperado;
+    private origemEsperada;
+    private classificacaoPorCfop;
+    private destinacaoPorOpf;
+    private fiscalRulesCache;
+    private invalidateFiscalRules;
+    private getFiscalRules;
+    private regraEsperadaDefault;
+    private regraEsperada;
+    getFiscalRegras(): Promise<{
+        regras: any[];
+        opf: any[];
+        origem: any[];
+    }>;
+    saveFiscalRegras(body: {
+        regras?: any[];
+        opf?: any[];
+        origem?: any[];
+    }): Promise<{
+        regras: any[];
+        opf: any[];
+        origem: any[];
+    }>;
+    private parseNotaParaAuditoria;
+    private fetchLancamentoErp;
+    private auditarLancamentoFiscal;
+    private static readonly CUF_SIGLA;
+    private cufToSigla;
+    private resolveJanelaEntrada;
+    listAuditorias(f: {
+        q?: string;
+        emitente?: string;
+        escopo?: string;
+        dtInicio?: string;
+        dtFim?: string;
+        page?: string | number;
+        pageSize?: string | number;
+    }): Promise<{
+        page: number;
+        pageSize: number;
+        total: any;
+        items: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+            totalErros: any;
+        }[];
+    }>;
+    getAuditoriaDetalhe(chaveNfe: string): Promise<{
+        header: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+        };
+        totalErros: number;
+        divergencias: {
+            nItem: number;
+            escopo: string;
+            campo: any;
+            esperado: any;
+            encontrado: any;
+            mensagem: any;
+        }[];
+    }>;
+    reconferirAuditoria(chaveNfe: string): Promise<{
+        header: {
+            chaveNfe: any;
+            numero: string;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            status: any;
+            auditadoEm: any;
+        };
+        totalErros: number;
+        divergencias: {
+            nItem: number;
+            escopo: string;
+            campo: any;
+            esperado: any;
+            encontrado: any;
+            mensagem: any;
+        }[];
+    }>;
     savePaymentStatus(dto: {
         chaveNfe: string;
         valor?: number;

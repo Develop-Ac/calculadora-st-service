@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, Post, Put, Query, StreamableFile, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { IcmsService } from './icms.service';
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
@@ -89,6 +89,51 @@ export class IcmsController {
     @Post('fiscal-conferencia')
     async persistFiscalConference(@Body() body: FiscalConferenceRequestDto) {
         return this.service.persistFiscalConference(body);
+    }
+
+    // ---- Aba "Conferência Fiscal": auditoria do lançamento ----
+
+    @Get('auditoria')
+    async listAuditoria(
+        @Query('q') q?: string,
+        @Query('emitente') emitente?: string,
+        @Query('escopo') escopo?: string,
+        @Query('dtInicio') dtInicio?: string,
+        @Query('dtFim') dtFim?: string,
+        @Query('page') page?: string,
+        @Query('pageSize') pageSize?: string,
+    ) {
+        return this.service.listAuditorias({ q, emitente, escopo, dtInicio, dtFim, page, pageSize });
+    }
+
+    @Get('auditoria/:chaveNfe')
+    async getAuditoria(@Param('chaveNfe') chaveNfe: string) {
+        const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);
+        if (!detalhe) {
+            throw new NotFoundException(`Auditoria não encontrada para a NF: ${chaveNfe}`);
+        }
+        return detalhe;
+    }
+
+    @Post('auditoria/:chaveNfe/reconferir')
+    async reconferirAuditoria(@Param('chaveNfe') chaveNfe: string) {
+        const detalhe = await this.service.reconferirAuditoria(chaveNfe);
+        if (!detalhe) {
+            throw new NotFoundException(`NF não encontrada para reconferir: ${chaveNfe}`);
+        }
+        return detalhe;
+    }
+
+    // ---- Regras fiscais configuráveis (modal da aba Conferência Fiscal) ----
+
+    @Get('fiscal-regras')
+    async getFiscalRegras() {
+        return this.service.getFiscalRegras();
+    }
+
+    @Put('fiscal-regras')
+    async saveFiscalRegras(@Body() body: { regras?: any[]; opf?: any[]; origem?: any[] }) {
+        return this.service.saveFiscalRegras(body || {});
     }
 
     @Get('payment-status')

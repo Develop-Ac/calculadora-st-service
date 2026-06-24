@@ -277,3 +277,153 @@ N8N_MVA_WEBHOOK_URL=https://atendimento-n8n.naayqg.easypanel.host/webhook/mva-al
 * Para testar sem o ERP: `POST` do contrato acima no webhook de produção
   (`/webhook/mva-alerta`). O caminho `/webhook-test/...` só funciona com o editor
   do n8n em modo "Listen for test event".
+
+## Auditoria fiscal do lançamento — NF LANCADA (junho/2026)
+
+Quando uma NF de entrada passa para **LANCADA** (confirmada na `NF_ENTRADA` do ERP),
+a auditoria cruza três fontes e, havendo divergência, avisa o grupo **Conferência
+Fiscal** no WhatsApp com o número da nota e os erros identificados.
+
+### Gatilho
+
+No `syncInvoices()`, logo após marcar as notas como `LANCADA`, chama
+`auditarLancamentoFiscal(chave)` para cada uma. Idempotente (alerta 1x por NF via
+`auditoria_alerta_em`) e tolerante a falha (try/catch — nunca quebra o sync).
+
+### Três fontes cruzadas
+
+| Fonte | Origem | Fornece |
+|-------|--------|---------|
+| Nota (verdade) | `com_nfe_conciliacao.xml_completo` | Cabeçalho (CNPJ, nº, série, modelo, emissão, chave, vNF) e itens (NCM, origem, CST/ST da nota) |
+| Conferência da tela | `com_nfe_conciliacao_item` | `imposto_escolhido` (ST/DIFAL/TRIBUTADA) e `destinacao_mercadoria` (COMERCIALIZACAO/USO_CONSUMO) por item |
+| Lançamento ERP | Firebird via OPENQUERY: `NF_ENTRADA` + `NFE_ITENS` (EMPRESA=1, join por `NFE`, item por `ITEM`) | O que foi lançado: `CFOP` (entrada), `CST_FISCAL`, `TOTAL_NOTA`, etc. |
+
+> Colunas duplas do ERP: audita-se o **`CFOP`** (entrada escriturado, ex. `2.407`) e
+> o **`CST_FISCAL`** (ex. `560`). `CFOP_NOTA`/`CST` são da nota do fornecedor
+> (informativos).
+
+### Auditoria de cabeçalho (`NF_ENTRADA` × nota)
+
+Número (`NOTA_FISCAL`), série, modelo, chave, CNPJ do emitente (dígitos 7–20 da
+chave), data de emissão e valor total (`TOTAL_NOTA`, tolerância R$ 0,01).
+
+### Auditoria por item — matriz esperada
+
+CFOP de entrada e final do CST conforme `imposto × destinação × (intra 1.x / inter 2.x)`:
+
+| imposto × destinação | CFOP entrada | CST final |
+|----------------------|--------------|-----------|
+| TRIBUTADA + Comercialização (revenda) | 1.102 / 2.102 | 00 |
+| ST + Comercialização (revenda) | 1.403 / 2.403 | 60 |
+| ST + Uso/Consumo | 1.407 / 2.407 | 60 |
+| TRIBUTADA + Uso/Consumo (DIFAL) | 1.556 / 2.556 | 90 |
+
+> Na ENTRADA, mercadoria com ST sempre tem **CST final 60** — o imposto já veio
+> retido pelo fornecedor (substituto). O final 10 é de operação de saída.
+
+**Origem do CST** (1º dígito): mantém a da nota, convertendo `1→2` e `6→7`
+(fornecedor importou direto, mas a aquisição foi no mercado interno).
+
+**Destinação em notas DENTRO do estado:** revenda x uso/consumo é determinada pelo
+`OPF_CODIGO` da `NF_ENTRADA` (não pela tela nem pelo CFOP do item): `1` ou `40` =
+compra/comercialização; `10` = uso/consumo. OPF não reconhecido vira divergência de
+cabeçalho. Em notas de fora do estado, segue a conferência da tela (ou inferência
+pelo CFOP lançado).
+
+A matriz e a conversão de origem vivem como funções de configuração no
+`icms.service.ts` (`cfopEntradaEsperado`, `cstFinalEsperado`, `origemEsperada`,
+`classificacaoPorCfop`), fáceis de ajustar para exceções da contabilidade.
+
+### NF lançada sem conferência na tela
+
+Se não há linhas em `com_nfe_conciliacao_item`, a auditoria **infere** imposto/
+destinação a partir do **CFOP lançado** (`classificacaoPorCfop`) e checa a coerência
+do CST/origem + cabeçalho. O resultado fica com status `SEM_CONFERENCIA`.
+
+### Estrutura de banco (PostgreSQL)
+
+Aplicar manualmente: `sql/2026-06-24_auditoria_fiscal_lancamento.sql`
+
+* `com_nfe_conciliacao`: `auditoria_fiscal_em`, `auditoria_fiscal_status`
+  (OK / DIVERGENTE / SEM_CONFERENCIA), `auditoria_alerta_em`.
+* `com_nfe_auditoria_item`: uma linha por divergência (`n_item = 0` para cabeçalho).
+
+Após aplicar, rodar `npx prisma generate`.
+
+### Variável de ambiente
+
+```env
+N8N_AUDITORIA_WEBHOOK_URL=https://atendimento-n8n.naayqg.easypanel.host/webhook/auditoria-nf
+```
+
+### n8n / WhatsApp
+
+Workflow **`Alerta_Auditoria_NF_Compra`** (webhook `/webhook/auditoria-nf`), mesmos
+nós do alerta de MVA (`Webhook → Montar mensagem → WAHA → Responder 200`), enviando
+para o grupo **Conferência Fiscal** (`120363410637434985@g.us`).
+
+Contrato do webhook (intranet → n8n):
+
+```json
+{
+  "chaveNfe": "...",
+  "numeroNf": "517098",
+  "serie": "1",
+  "emitente": "...",
+  "ufEmitente": "GO",
+  "dtEntrada": "2026-06-19",
+  "statusAuditoria": "DIVERGENTE",
+  "totalErros": 2,
+  "erros": [
+    { "escopo": "ITEM", "nItem": 6, "proCodigo": "49458", "campo": "CFOP", "esperado": "2403", "encontrado": "2102", "mensagem": "CFOP esperado 2403, lançado 2102" },
+    { "escopo": "CABECALHO", "campo": "Valor total", "esperado": "1062.27", "encontrado": "1060.00", "mensagem": "Valor total divergente" }
+  ]
+}
+```
+
+### Endpoints de consulta (aba "Conferência Fiscal" do frontend)
+
+* `GET /icms/auditoria` — lista NFs lançadas com o status da auditoria.
+  Query params: `q` (nº ou chave), `emitente` (nome ou CNPJ), `escopo`
+  (`TODOS`|`DENTRO`|`FORA`), `dtInicio`, `dtFim` (data de entrada; **default = mês
+  corrente**), `page`, `pageSize`. Retorna `{ page, pageSize, total, items[] }`.
+* `GET /icms/auditoria/:chaveNfe` — detalhe: cabeçalho + `divergencias[]` (item a item).
+* `POST /icms/auditoria/:chaveNfe/reconferir` — **reexecuta a auditoria manualmente
+  sem disparar o WhatsApp** (`auditarLancamentoFiscal(chave, { enviarAlerta: false })`)
+  e devolve o detalhe atualizado.
+
+Frontend: aba **Conferência Fiscal** na tela de NF de entrada
+(`cotacao-frontend/app/(private)/compras/notaFiscal/notaFiscal/`), componente
+`components/ConferenciaFiscal.tsx` — lista com filtros (nº/chave, emitente/CNPJ,
+dentro/fora do estado, data de entrada), status por nota, detalhe com erros item a
+item e botão **Reconferir**.
+
+### Conferência do cadastro do produto
+
+Além de CFOP/CST, a auditoria confere o **cadastro** de cada item: pega o
+`PRO_CODIGO` que o ERP lançou em `NFE_ITENS`, consulta `Stage_Produtos` e compara
+`ST_CODIGO` (Situação Tributária: `ST0-X`/`TR0-X`), `PIS_CODIGO`, `COFINS_CODIGO`,
+`SUBTIPO`, `COMERCIALIZAVEL` e `SUBGRP_CODIGO` com o esperado da regra. PIS/COFINS
+variam por NCM monofásico (`04`/`04`) vs normal (`P01`/`C01`); uso/consumo usa
+`P99`/`C99`. (É a mesma conferência da tela de NF, agora também no lançamento.)
+
+### Regras fiscais configuráveis
+
+A matriz e os mapeamentos saíram do código para tabelas editáveis (script
+`sql/2026-06-24_regras_fiscais_configuraveis.sql`):
+
+* `com_fiscal_regra` — matriz `imposto × destinação (× monofásico)` → `cfop_sufixo`,
+  `cst_final`, `st_codigo`, `pis_codigo`, `cofins_codigo`, `subtipo`,
+  `comercializavel`, `subgrp_codigo`. Campo vazio = não confere.
+* `com_fiscal_opf_destinacao` — `OPF_CODIGO` → destinação (notas intra).
+* `com_fiscal_origem_cst` — conversão do 1º dígito (origem) do CST.
+
+A auditoria carrega as regras com cache (`getFiscalRules`, invalidado ao salvar) e,
+se as tabelas estiverem vazias, usa os **defaults embutidos** (`regraEsperadaDefault`).
+DIFAL é tratado como Tributada + Uso/Consumo.
+
+Endpoints + UI:
+* `GET /icms/fiscal-regras` — retorna `{ regras, opf, origem }`.
+* `PUT /icms/fiscal-regras` — substitui tudo (full replace atômico) e invalida o cache.
+* Botão **Regras fiscais** no topo da aba abre o modal `RegrasFiscaisModal.tsx`
+  (3 seções editáveis: matriz, OPF→destinação, origem CST).

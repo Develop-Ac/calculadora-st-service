@@ -44,6 +44,11 @@ model NfeConciliacao {
   mva_alerta_enviado_em DateTime?         // WhatsApp já disparado (anti-duplicidade)
   mva_maior             Float?            // maior pMVAST encontrado na nota
 
+  // Auditoria fiscal do lançamento (NF LANCADA) — ver auditarLancamentoFiscal()
+  auditoria_fiscal_em     DateTime?       // auditoria já executada para esta NF
+  auditoria_fiscal_status String?         // OK | DIVERGENTE | SEM_CONFERENCIA
+  auditoria_alerta_em     DateTime?       // WhatsApp de auditoria já disparado (anti-duplicidade)
+
   updated_at     DateTime @updatedAt
   created_at     DateTime @default(now())
 
