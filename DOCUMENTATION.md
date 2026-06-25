@@ -403,6 +403,12 @@ As reconferências (individual e período) buscam o cadastro do produto **direto
 `Stage_Produtos` (~1 min) — assim refletem alterações de cadastro na hora. A abertura
 normal do detalhe e o sync automático continuam usando o Stage (com fallback no ERP).
 
+**Reconciliação de status na reconferência** (`reconciliarStatusEntrada`): antes de
+auditar, confere o ERP — está em `NF_ENTRADA` → `LANCADA` (audita); voltou para
+`NFE_DISTRIBUICAO` → `PENDENTE`; sumiu das duas → `EXCLUIDA`. Notas que deixam de
+estar `LANCADA` saem da auditoria (a lista filtra por `LANCADA`). Em falha de consulta
+ao ERP, **não** marca como excluída (conservador).
+
 O `OPF_CODIGO` **apenas determina** a destinação (revenda x uso/consumo) das notas
 intra — não aparece como item de conferência.
 

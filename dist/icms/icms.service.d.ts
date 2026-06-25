@@ -172,6 +172,8 @@ export declare class IcmsService {
     }>;
     private parseNotaParaAuditoria;
     private fetchLancamentoErp;
+    private existsInNfeDistribuicao;
+    private reconciliarStatusEntrada;
     private computarAuditoria;
     private errosFromComputado;
     private auditarLancamentoFiscal;
@@ -225,6 +227,7 @@ export declare class IcmsService {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            mensagem: string;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -235,6 +238,7 @@ export declare class IcmsService {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: any[];
@@ -255,6 +259,7 @@ export declare class IcmsService {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: {
@@ -286,6 +291,7 @@ export declare class IcmsService {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            mensagem: string;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -296,6 +302,7 @@ export declare class IcmsService {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: any[];
@@ -316,6 +323,7 @@ export declare class IcmsService {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: {

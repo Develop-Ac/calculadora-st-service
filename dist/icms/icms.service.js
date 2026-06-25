@@ -2080,6 +2080,31 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const itens = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${itemSql.replace(/'/g, "''")}')`, {}, { timeout: 300000, allowZeroRows: true });
         return { header, itens };
     }
+    async existsInNfeDistribuicao(chaveNfe) {
+        const safe = String(chaveNfe).replace(/'/g, "''");
+        const fb = `SELECT FIRST 1 CHAVE_NFE FROM NFE_DISTRIBUICAO WHERE EMPRESA = 1 AND IMPORTADA = 'N' AND CHAVE_NFE = '${safe}'`;
+        try {
+            const rows = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${fb.replace(/'/g, "''")}')`, {}, { timeout: 120000, allowZeroRows: true });
+            return rows.length > 0;
+        }
+        catch (e) {
+            this.logger.error(`Falha ao checar NFE_DISTRIBUICAO ${chaveNfe}`, e instanceof Error ? e.stack : String(e), 'Auditoria');
+            return true;
+        }
+    }
+    async reconciliarStatusEntrada(chaveNfe) {
+        const erp = await this.fetchLancamentoErp(chaveNfe);
+        if (erp)
+            return 'LANCADA';
+        const naDistribuicao = await this.existsInNfeDistribuicao(chaveNfe);
+        const status = naDistribuicao ? 'PENDENTE' : 'EXCLUIDA';
+        await this.prisma.nfeConciliacao.update({
+            where: { chave_nfe: chaveNfe },
+            data: { status_erp: status, updated_at: new Date() },
+        });
+        this.logger.log(`Reconferência: NF ${chaveNfe} não está mais lançada no ERP → status ${status}.`, 'Auditoria');
+        return status;
+    }
     async computarAuditoria(chaveNfe, opts = {}) {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         const nfeRow = await this.prisma.nfeConciliacao.findUnique({
@@ -2328,7 +2353,10 @@ let IcmsService = IcmsService_1 = class IcmsService {
              ORDER BY c.dt_entrada DESC NULLS LAST LIMIT 2000`, ...params);
         const chaves = chaveRows.map((r) => r.chave_nfe);
         for (const chave of chaves) {
-            await this.auditarLancamentoFiscal(chave, { enviarAlerta: false, produtoDireto: true });
+            const status = await this.reconciliarStatusEntrada(chave);
+            if (status === 'LANCADA') {
+                await this.auditarLancamentoFiscal(chave, { enviarAlerta: false, produtoDireto: true });
+            }
         }
         const sumRows = await this.prisma.$queryRawUnsafe(`SELECT auditoria_fiscal_status AS s, count(*)::int AS c
              FROM com_nfe_conciliacao c WHERE ${where} GROUP BY auditoria_fiscal_status`, ...params);
@@ -2378,9 +2406,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
         };
     }
     async getAuditoriaDetalhe(chaveNfe, direto = false) {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         const rows = await this.prisma.$queryRawUnsafe(`SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,
-                    auditoria_fiscal_status, auditoria_fiscal_em,
+                    auditoria_fiscal_status, auditoria_fiscal_em, status_erp,
                     substring(chave_nfe from 26 for 9) AS numero, left(chave_nfe, 2) AS cuf
              FROM com_nfe_conciliacao WHERE chave_nfe = $1`, chaveNfe);
         const b = rows[0];
@@ -2398,11 +2426,15 @@ let IcmsService = IcmsService_1 = class IcmsService {
             dataEmissao: b.data_emissao,
             dtEntrada: b.dt_entrada,
             valorTotal: Number(b.valor_total || 0),
+            statusErp: (_g = b.status_erp) !== null && _g !== void 0 ? _g : null,
             auditadoEm: b.auditoria_fiscal_em,
         };
         if (!r) {
+            const lancada = b.status_erp === 'LANCADA';
             return {
-                header: Object.assign(Object.assign({}, baseHeader), { status: (_g = b.auditoria_fiscal_status) !== null && _g !== void 0 ? _g : 'PENDENTE', totalErros: 0, semConferencia: false, naoAuditavel: true }),
+                header: Object.assign(Object.assign({}, baseHeader), { status: (_h = b.auditoria_fiscal_status) !== null && _h !== void 0 ? _h : 'PENDENTE', totalErros: 0, semConferencia: false, naoAuditavel: true, mensagem: lancada
+                        ? 'NF lançada sem XML completo — não há detalhe a conferir.'
+                        : `NF não está mais lançada no ERP (status ${(_j = b.status_erp) !== null && _j !== void 0 ? _j : '—'}) — removida da auditoria.` }),
                 cabecalho: [],
                 itens: [],
             };
@@ -2425,7 +2457,10 @@ let IcmsService = IcmsService_1 = class IcmsService {
         };
     }
     async reconferirAuditoria(chaveNfe) {
-        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
+        const status = await this.reconciliarStatusEntrada(chaveNfe);
+        if (status === 'LANCADA') {
+            await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
+        }
         return this.getAuditoriaDetalhe(chaveNfe, true);
     }
     async savePaymentStatus(dto) {

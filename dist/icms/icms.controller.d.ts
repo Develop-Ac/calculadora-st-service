@@ -116,6 +116,7 @@ export declare class IcmsController {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            mensagem: string;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -126,6 +127,7 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: any[];
@@ -146,6 +148,7 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: {
@@ -177,6 +180,7 @@ export declare class IcmsController {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            mensagem: string;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -187,6 +191,7 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: any[];
@@ -207,6 +212,7 @@ export declare class IcmsController {
             dataEmissao: any;
             dtEntrada: any;
             valorTotal: number;
+            statusErp: any;
             auditadoEm: any;
         };
         cabecalho: {
