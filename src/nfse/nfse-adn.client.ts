@@ -125,17 +125,33 @@ export class NfseAdnClient {
 
   /**
    * Baixa o PDF do DANFSE pela chave de acesso (API DANFSE do ADN).
-   * O path exato pode variar conforme o Swagger; ajuste via NFSE_DANFSE_PATH
-   * (use {chave} como placeholder). Default: /{chave}.
+   *
+   * O endpoint documentado é GET /danfse/{chaveAcesso}. Como há ambiguidade de
+   * montagem (host já termina em /danfse), tentamos os caminhos candidatos e,
+   * em erros de gateway (502/503/504, comuns em homologação), repetimos.
+   * Pode-se forçar um path via NFSE_DANFSE_PATH (use {chave} como placeholder).
    */
   async baixarDanfse(chaveAcesso: string, cnpjConsulta?: string): Promise<Buffer> {
-    const tpl = process.env.NFSE_DANFSE_PATH || '/{chave}';
-    const path = tpl.replace('{chave}', encodeURIComponent(chaveAcesso));
-    const { status, buffer } = await this.getBuffer(this.danfseBaseUrl(), path, cnpjConsulta);
-    if (status !== 200 || !buffer.length) {
-      throw new Error(`DANFSE indisponível (status ${status}) para a chave ${chaveAcesso}.`);
+    const enc = encodeURIComponent(chaveAcesso);
+    const candidatos = Array.from(
+      new Set([process.env.NFSE_DANFSE_PATH, '/{chave}', '/danfse/{chave}'].filter(Boolean) as string[]),
+    ).map((t) => t.replace('{chave}', enc));
+
+    let ultimoStatus = 0;
+    for (const path of candidatos) {
+      for (let tentativa = 0; tentativa < 2; tentativa++) {
+        const { status, buffer } = await this.getBuffer(this.danfseBaseUrl(), path, cnpjConsulta);
+        if (status === 200 && buffer.length) return buffer;
+        ultimoStatus = status;
+        if (![502, 503, 504].includes(status)) break; // 404/outro: tenta próximo caminho
+        await new Promise((r) => setTimeout(r, 800)); // gateway instável: repete o mesmo caminho
+      }
     }
-    return buffer;
+    const dica =
+      ultimoStatus >= 502
+        ? ' O serviço DANFSE pode estar instável (comum em homologação) — tente novamente.'
+        : '';
+    throw new Error(`DANFSE indisponível (status ${ultimoStatus}) para a chave ${chaveAcesso}.${dica}`);
   }
 
   private async get(
