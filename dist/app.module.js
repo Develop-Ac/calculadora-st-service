@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const schedule_1 = require("@nestjs/schedule");
 const icms_module_1 = require("./icms/icms.module");
+const nfse_module_1 = require("./nfse/nfse.module");
 const prisma_module_1 = require("./prisma/prisma.module");
 const openquery_module_1 = require("./shared/database/openquery/openquery.module");
 let AppModule = class AppModule {
@@ -24,6 +25,7 @@ exports.AppModule = AppModule = __decorate([
             prisma_module_1.PrismaModule,
             openquery_module_1.OpenQueryModule,
             icms_module_1.IcmsModule,
+            nfse_module_1.NfseModule,
         ],
     })
 ], AppModule);

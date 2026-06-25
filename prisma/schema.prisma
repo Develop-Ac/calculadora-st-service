@@ -54,3 +54,73 @@ model NfeConciliacao {
 
   @@map("com_nfe_conciliacao")
 }
+
+// Ponteiro de NSU da distribuição de NFS-e (ADN) por CNPJ consultado.
+model NfseDistControle {
+  cnpj            String   @id
+  ultimo_nsu      BigInt   @default(0)
+  max_nsu         BigInt   @default(0)
+  ultima_consulta DateTime?
+  atualizado_em   DateTime @updatedAt
+
+  @@map("com_nfse_dist_controle")
+}
+
+// NFS-e Nacional captada da ADN. Chave = entidade da nota (upsert por chave).
+// Mudanças (substituição) atualizam a linha; eventos alteram a `situacao`.
+model NfseDocumento {
+  chave_acesso      String    @id
+  cnpj_destinatario String
+  ultimo_nsu        BigInt    @default(0)
+  numero            String?
+  serie             String?
+  cnpj_prestador    String?
+  nome_prestador    String?
+  cnpj_tomador      String?
+  nome_tomador      String?
+  valor             Float?
+  data_emissao      DateTime?
+  competencia       DateTime?
+  situacao          String    @default("NORMAL") // NORMAL | CANCELADA | SUBSTITUIDA
+  papel             String? // PRESTADOR | TOMADOR | INTERMEDIARIO
+  xml               String    @db.Text
+  hash              String? // detecta mudança no XML p/ decidir atualizar
+  dados_json        Json?
+  processado        Boolean   @default(false)
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  @@index([cnpj_prestador])
+  @@index([data_emissao])
+  @@index([numero])
+  @@map("com_nfse_documento")
+}
+
+// Eventos vinculados a uma NFS-e (cancelamento, substituição, etc.).
+model NfseEvento {
+  nsu          BigInt    @id
+  chave_acesso String
+  tipo_evento  String?
+  data_evento  DateTime?
+  xml          String    @db.Text
+  dados_json   Json?
+  created_at   DateTime  @default(now())
+
+  @@index([chave_acesso])
+  @@map("com_nfse_evento")
+}
+
+// Certificado e-CNPJ A1 vinculado pelo frontend (mTLS da ADN).
+// A senha é guardada cifrada (AES-256-GCM) quando NFSE_CERT_SECRET existe.
+model NfseCertificado {
+  cnpj          String   @id
+  nome          String?
+  arquivo       Bytes // conteúdo do .pfx
+  senha         String // cifrada (enc:v1:...) ou texto puro (fallback)
+  validade_ate  DateTime?
+  ativo         Boolean  @default(true)
+  atualizado_em DateTime @updatedAt
+  created_at    DateTime @default(now())
+
+  @@map("com_nfse_certificado")
+}
