@@ -1242,6 +1242,10 @@ export class IcmsService {
 
         const results = [];
 
+        // Tolerância (R$) para decidir se PRECISA de guia: diferenças de ST dentro
+        // de ±tolerância são tratadas como OK (sem guia). Default R$ 10,00.
+        const tolGuia = Number(process.env.GUIA_TOLERANCIA_BRL) > 0 ? Number(process.env.GUIA_TOLERANCIA_BRL) : 10;
+
         for (const item of det) {
             const prod = item.prod;
             const imposto = item.imposto;
@@ -1329,12 +1333,12 @@ export class IcmsService {
                 diffSt = 0;
                 status = "Sem Tributação";
             } else if (!isDefaultMva) {
-                if (diffSt > 0.05) status = "Guia Complementar";
-                else if (diffSt < -0.05) status = "Pago a Maior";
+                if (diffSt > tolGuia) status = "Guia Complementar";
+                else if (diffSt < -tolGuia) status = "Pago a Maior";
                 else status = "OK";
             } else {
-                if (diffSt > 0.05) status = "Guia Compl. (Padrão 50%)";
-                else if (diffSt < -0.05) status = "Pago Maior (Padrão 50%)";
+                if (diffSt > tolGuia) status = "Guia Compl. (Padrão 50%)";
+                else if (diffSt < -tolGuia) status = "Pago Maior (Padrão 50%)";
                 else status = "OK (Padrão 50%)";
             }
 
