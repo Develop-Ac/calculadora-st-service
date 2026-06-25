@@ -2973,10 +2973,11 @@ export class IcmsService {
             this.logger.warn('WAHA_BASE_URL/WAHA_API_KEY/WAHA_GROUP_CHAT_ID não configurados: pulando polling de "ajustado".', 'Auditoria');
             return;
         }
-        const janelaMin = Number(process.env.WAHA_AJUSTADO_JANELA_MIN) > 0 ? Number(process.env.WAHA_AJUSTADO_JANELA_MIN) : 15;
+        const janelaMin = Number(process.env.WAHA_AJUSTADO_JANELA_MIN) > 0 ? Number(process.env.WAHA_AJUSTADO_JANELA_MIN) : 1440;
         const limiteAntigoSec = Math.floor(Date.now() / 1000) - janelaMin * 60;
+        const msgLimit = Number(process.env.WAHA_AJUSTADO_MSG_LIMIT) > 0 ? Number(process.env.WAHA_AJUSTADO_MSG_LIMIT) : 200;
 
-        const url = `${base.replace(/\/$/, '')}/api/${session}/chats/${encodeURIComponent(group)}/messages?limit=30&downloadMedia=false`;
+        const url = `${base.replace(/\/$/, '')}/api/${session}/chats/${encodeURIComponent(group)}/messages?limit=${msgLimit}&downloadMedia=false`;
         const resp = await fetch(url, { headers: { 'X-Api-Key': key } });
         if (!resp.ok) {
             this.logger.error(`WAHA recusou leitura de mensagens: HTTP ${resp.status}`, undefined, 'Auditoria');
