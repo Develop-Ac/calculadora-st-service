@@ -125,6 +125,7 @@ export class NfseDistService {
       cnpj_tomador: extra.cnpjTomador || null,
       nome_tomador: extra.nomeTomador || null,
       valor: extra.valor ?? null,
+      retencao_federal: extra.retencaoFederal ?? 0,
       data_emissao: extra.dataEmissao || null,
       competencia: extra.competencia || null,
       papel: this.definirPapel(cnpjDest, extra),
@@ -214,6 +215,21 @@ export class NfseDistService {
       valores?.vLiq ?? valores?.vServPrest?.vServ ?? valores?.vServ ?? valores?.vNF ?? undefined;
     const valor = valorRaw != null ? Number(String(valorRaw).replace(',', '.')) : undefined;
 
+    // Retenção federal = PIS+COFINS+IRRF+CSLL+INSS (em DPS/.../trib/tribFed).
+    const num = (v: any): number => {
+      if (v == null) return 0;
+      const x = Number(String(v).replace(',', '.'));
+      return Number.isFinite(x) ? x : 0;
+    };
+    const tribFed = dps?.valores?.trib?.tribFed || {};
+    const pisCofins = tribFed?.piscofins || tribFed?.PisCofins || {};
+    const retencaoFederal =
+      num(pisCofins?.vPis ?? tribFed?.vPis) +
+      num(pisCofins?.vCofins ?? tribFed?.vCofins) +
+      num(tribFed?.vRetIRRF ?? tribFed?.vIRRF) +
+      num(tribFed?.vRetCSLL ?? tribFed?.vCSLL) +
+      num(tribFed?.vRetCP ?? tribFed?.vINSS ?? tribFed?.vCP);
+
     return {
       tipo: ehEvento ? 'EVENTO' : 'NFSE',
       tipoEvento: ehEvento ? this.tipoEvento(obj) : undefined,
@@ -225,6 +241,7 @@ export class NfseDistService {
       cnpjTomador: toma?.CNPJ || toma?.cnpj || undefined,
       nomeTomador: toma?.xNome || toma?.nome || undefined,
       valor: Number.isFinite(valor as number) ? (valor as number) : undefined,
+      retencaoFederal: Math.round(retencaoFederal * 100) / 100,
       dataEmissao: this.parseData(inf?.dhProc || inf?.dhEmi || dps?.dhEmi),
       competencia: this.parseData(dps?.dCompet || inf?.dCompet),
       json: obj,
@@ -279,10 +296,14 @@ export class NfseDistService {
     dataInicio?: string;
     dataFim?: string;
     papel?: string;
+    comRetFederal?: string;
     page?: string;
     pageSize?: string;
   }) {
     const where: any = {};
+    if (filtros.comRetFederal === '1' || filtros.comRetFederal === 'true') {
+      where.retencao_federal = { gt: 0 };
+    }
     const root = (process.env.NFSE_ADN_CNPJ || '').replace(/\D/g, '').slice(0, 8);
     const prestados = (filtros.papel || '').toUpperCase() === 'PRESTADOS';
     const c = (filtros.cnpj || '').replace(/\D/g, '');
@@ -481,6 +502,26 @@ export class NfseDistService {
     return { status: r.status, total: r.documentos.length, eventos: r.documentos };
   }
 
+  /** Backfill: recalcula campos derivados do XML já salvo (ex.: retencao_federal). */
+  async reprocessar(): Promise<{ total: number; atualizados: number }> {
+    const rows = await this.prisma.nfseDocumento.findMany({
+      select: { chave_acesso: true, xml: true },
+    });
+    let atualizados = 0;
+    for (const r of rows) {
+      if (!r.xml) continue;
+      const extra = await this.extrair(r.xml).catch(() => null);
+      if (!extra) continue;
+      await this.prisma.nfseDocumento.update({
+        where: { chave_acesso: r.chave_acesso },
+        data: { retencao_federal: extra.retencaoFederal ?? 0 },
+      });
+      atualizados++;
+    }
+    this.logger.log(`Reprocessamento NFS-e: ${atualizados}/${rows.length} atualizado(s).`);
+    return { total: rows.length, atualizados };
+  }
+
   /** Remove campos pesados (xml) e serializa BigInt p/ a listagem. */
   private serializar(r: any) {
     const { xml, ...rest } = r;
@@ -499,6 +540,7 @@ interface ExtractedNfse {
   cnpjTomador?: string;
   nomeTomador?: string;
   valor?: number;
+  retencaoFederal?: number;
   dataEmissao?: Date;
   competencia?: Date;
   papel?: string;

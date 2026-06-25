@@ -79,6 +79,7 @@ model NfseDocumento {
   cnpj_tomador      String?
   nome_tomador      String?
   valor             Float?
+  retencao_federal  Float     @default(0) // soma PIS+COFINS+IRRF+CSLL+INSS retidos
   data_emissao      DateTime?
   competencia       DateTime?
   situacao          String    @default("NORMAL") // NORMAL | CANCELADA | SUBSTITUIDA

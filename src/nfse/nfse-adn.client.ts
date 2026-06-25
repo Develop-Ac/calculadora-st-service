@@ -132,25 +132,32 @@ export class NfseAdnClient {
    * Pode-se forçar um path via NFSE_DANFSE_PATH (use {chave} como placeholder).
    */
   async baixarDanfse(chaveAcesso: string, cnpjConsulta?: string): Promise<Buffer> {
-    const enc = encodeURIComponent(chaveAcesso);
-    const candidatos = Array.from(
-      new Set([process.env.NFSE_DANFSE_PATH, '/{chave}', '/danfse/{chave}'].filter(Boolean) as string[]),
-    ).map((t) => t.replace('{chave}', enc));
+    const tpl = process.env.NFSE_DANFSE_PATH || '/{chave}';
+    const path = tpl.replace('{chave}', encodeURIComponent(chaveAcesso));
+    const maxTentativas = Number(process.env.NFSE_DANFSE_RETRIES) || 5;
 
+    // 429 (rate limit) e 502/503/504 (gateway) são transitórios: repete com backoff.
     let ultimoStatus = 0;
-    for (const path of candidatos) {
-      for (let tentativa = 0; tentativa < 2; tentativa++) {
-        const { status, buffer } = await this.getBuffer(this.danfseBaseUrl(), path, cnpjConsulta);
-        if (status === 200 && buffer.length) return buffer;
-        ultimoStatus = status;
-        if (![502, 503, 504].includes(status)) break; // 404/outro: tenta próximo caminho
-        await new Promise((r) => setTimeout(r, 800)); // gateway instável: repete o mesmo caminho
-      }
+    for (let i = 0; i < maxTentativas; i++) {
+      const { status, buffer, headers } = await this.getBuffer(this.danfseBaseUrl(), path, cnpjConsulta);
+      if (status === 200 && buffer.length) return buffer;
+      ultimoStatus = status;
+      if (![429, 502, 503, 504].includes(status)) break; // erro definitivo (ex.: 404)
+
+      const retryAfter = Number(headers?.['retry-after']);
+      const espera =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : Math.min(8000, 600 * 2 ** i); // backoff exponencial até 8s
+      await new Promise((r) => setTimeout(r, espera));
     }
+
     const dica =
-      ultimoStatus >= 502
-        ? ' O serviço DANFSE pode estar instável (comum em homologação) — tente novamente.'
-        : '';
+      ultimoStatus === 429
+        ? ' Limite de requisições da ADN atingido (429) — aguarde alguns segundos e tente novamente.'
+        : ultimoStatus >= 502
+          ? ' Serviço DANFSE instável — tente novamente.'
+          : '';
     throw new Error(`DANFSE indisponível (status ${ultimoStatus}) para a chave ${chaveAcesso}.${dica}`);
   }
 
@@ -168,7 +175,7 @@ export class NfseAdnClient {
     path: string,
     cnpj?: string,
     accept = 'application/pdf',
-  ): Promise<{ status: number; buffer: Buffer }> {
+  ): Promise<{ status: number; buffer: Buffer; headers: Record<string, any> }> {
     const url = new URL(base + path);
     const agent = await this.getAgent(cnpj);
     const timeoutMs = Number(process.env.NFSE_ADN_TIMEOUT_MS) || 30000;
@@ -185,7 +192,13 @@ export class NfseAdnClient {
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c) => chunks.push(c as Buffer));
-          res.on('end', () => resolve({ status: res.statusCode || 0, buffer: Buffer.concat(chunks) }));
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode || 0,
+              buffer: Buffer.concat(chunks),
+              headers: res.headers as Record<string, any>,
+            }),
+          );
         },
       );
       req.on('error', reject);

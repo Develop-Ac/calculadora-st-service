@@ -42,10 +42,17 @@ export class NfseController {
     @Query('dataInicio') dataInicio?: string,
     @Query('dataFim') dataFim?: string,
     @Query('papel') papel?: string,
+    @Query('comRetFederal') comRetFederal?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.service.listar({ numero, cnpj, dataInicio, dataFim, papel, page, pageSize });
+    return this.service.listar({ numero, cnpj, dataInicio, dataFim, papel, comRetFederal, page, pageSize });
+  }
+
+  /** Backfill: recalcula campos derivados (ex.: retenção federal) do histórico. */
+  @Post('reprocessar')
+  reprocessar() {
+    return this.service.reprocessar();
   }
 
   /** Detalhe completo de uma NFS-e (todos os dados + eventos + XML). */
