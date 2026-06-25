@@ -2221,6 +2221,13 @@ export class IcmsService {
         if (suf === '403') return { imposto: 'ST', destinacao: 'COMERCIALIZACAO' };
         if (suf === '407') return { imposto: 'ST', destinacao: 'USO_CONSUMO' };
         if (suf === '556') return { imposto: 'TRIBUTADA', destinacao: 'USO_CONSUMO' };
+        // Devolução / transferência / retorno / combustível / outras (destinação = comercialização)
+        if (suf === '411') return { imposto: 'ST', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '202') return { imposto: 'TRIBUTADA', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '653') return { imposto: 'ST', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '152') return { imposto: 'TRIBUTADA', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '916') return { imposto: 'TRIBUTADA', destinacao: 'COMERCIALIZACAO' };
+        if (suf === '949') return { imposto: 'ST', destinacao: 'COMERCIALIZACAO' };
         return null;
     }
 
@@ -2636,13 +2643,10 @@ export class IcmsService {
                     destinacao = cItem.destinacao_mercadoria;
                 } else {
                     const inferido = this.classificacaoPorCfop(cfopLanc);
-                    if (!inferido) {
-                        checks.push({ campo: 'CFOP', esperado: null, encontrado: cfopLanc, ok: false, mensagem: `CFOP lançado ${cfopLanc} não reconhecido para auditoria` });
-                        itens.push({ nItem, proCodigo, descricao, imposto: null, destinacao: null, checks });
-                        continue;
+                    if (inferido) {
+                        imposto = inferido.imposto;
+                        destinacao = inferido.destinacao;
                     }
-                    imposto = inferido.imposto;
-                    destinacao = inferido.destinacao;
                 }
                 if (intra && destinacaoIntra) destinacao = destinacaoIntra;
 
@@ -2659,6 +2663,8 @@ export class IcmsService {
 
                 if (cfopExp) {
                     checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
+                } else if (cfopLanc) {
+                    checks.push({ campo: 'CFOP', esperado: null, encontrado: cfopLanc, ok: false, mensagem: `CFOP ${cfopLanc} (fornecedor ${cfopNota || '?'}) sem regra cadastrada — verifique em Regras fiscais` });
                 }
                 if (cstFinalExp) {
                     const enc = cstFiscalLanc ? cstFiscalLanc.slice(-2) : '';
