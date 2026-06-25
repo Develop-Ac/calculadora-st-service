@@ -53,18 +53,12 @@ export class NfseDistService {
       iteracoes++;
       const resp = await this.adn.consultarDFe(ultimoNSU, cnpj);
 
-      if (resp.status === 204) break; // sem documentos novos
+      // Condição normal de "fim da fila" (404/E2220 ou 204): encerra sem alarde.
+      if (resp.semDocumentos) break;
       if (resp.status !== 200) {
-        this.logger.warn(
-          `ADN retornou status ${resp.status} (NSU ${ultimoNSU}): ${resp.rawBody.slice(0, 300)}`,
-        );
+        const detalhe = resp.erros?.length ? JSON.stringify(resp.erros) : resp.rawBody.slice(0, 300);
+        this.logger.warn(`ADN retornou status ${resp.status} (NSU ${ultimoNSU}): ${detalhe}`);
         break;
-      }
-
-      if (i === 0 && resp.documentos[0]) {
-        this.logger.debug(
-          `Chaves do 1º DF-e retornado pela ADN: ${Object.keys(resp.documentos[0].raw).join(', ')}`,
-        );
       }
 
       for (const doc of resp.documentos) {
@@ -87,6 +81,10 @@ export class NfseDistService {
       if (maxNSU && ultimoNSU >= maxNSU) break;
     }
 
+    this.logger.log(
+      `Distribuição NFS-e: ${novos} nova(s), ${atualizados} atualizada(s), ${eventos} evento(s); ` +
+        `NSU ${ultimoNSU}/${maxNSU} em ${iteracoes} iteração(ões).`,
+    );
     return { novos, atualizados, eventos, ultimoNSU, maxNSU, iteracoes };
   }
 

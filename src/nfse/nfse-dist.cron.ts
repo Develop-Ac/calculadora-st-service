@@ -29,10 +29,7 @@ export class NfseDistCron {
 
     this.rodando = true;
     try {
-      const r = await this.service.sincronizar();
-      this.logger.log(
-        `Distribuição NFS-e: ${r.novos} novo(s) doc(s), NSU ${r.ultimoNSU}/${r.maxNSU} em ${r.iteracoes} iteração(ões).`,
-      );
+      await this.service.sincronizar(); // o resumo é logado pelo próprio serviço
     } catch (err) {
       this.logger.error(
         `Falha na distribuição NFS-e: ${err instanceof Error ? err.message : String(err)}`,

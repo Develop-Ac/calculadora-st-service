@@ -38,6 +38,10 @@ export interface AdnDfeResposta {
   ultimoNSU: number;
   maxNSU: number;
   documentos: AdnDfeItem[];
+  /** true quando a ADN diz que não há documentos a partir do NSU (404/E2220 ou 204). */
+  semDocumentos: boolean;
+  statusProcessamento?: string;
+  erros?: any[];
   rawBody: string;
 }
 
@@ -175,18 +179,33 @@ export class NfseAdnClient {
   }
 
   private parseDfe(status: number, body: string, nsuConsultado: number): AdnDfeResposta {
+    const base = (extra: Partial<AdnDfeResposta> = {}): AdnDfeResposta => ({
+      status,
+      ultimoNSU: nsuConsultado,
+      maxNSU: nsuConsultado,
+      documentos: [],
+      semDocumentos: false,
+      rawBody: body,
+      ...extra,
+    });
+
     // 204 = sem documentos novos a partir do NSU informado.
-    if (status === 204 || !body) {
-      return { status, ultimoNSU: nsuConsultado, maxNSU: nsuConsultado, documentos: [], rawBody: body };
-    }
+    if (status === 204 || !body) return base({ semDocumentos: true });
 
     let json: any = {};
     try {
       json = JSON.parse(body);
     } catch {
       this.logger.warn(`Resposta da ADN não é JSON válido (status ${status}).`);
-      return { status, ultimoNSU: nsuConsultado, maxNSU: nsuConsultado, documentos: [], rawBody: body };
+      return base();
     }
+
+    // Contrato real da ADN: StatusProcessamento / LoteDFe / Erros / Alertas.
+    const statusProc = json.StatusProcessamento || json.statusProcessamento;
+    const erros: any[] = json.Erros || json.erros || [];
+    const semDocumentos =
+      statusProc === 'NENHUM_DOCUMENTO_LOCALIZADO' ||
+      erros.some((e) => (e?.Codigo || e?.codigo) === 'E2220');
 
     const lote: any[] =
       json.LoteDFe || json.loteDFe || json.lote || json.Documentos || json.documentos || [];
@@ -195,10 +214,23 @@ export class NfseAdnClient {
       .filter((d): d is AdnDfeItem => !!d);
 
     const maxNsuDoc = documentos.length ? Math.max(...documentos.map((d) => d.nsu)) : nsuConsultado;
-    const ultimoNSU = Number(json.ultimoNSU ?? json.UltimoNSU ?? maxNsuDoc);
-    const maxNSU = Number(json.maxNSU ?? json.MaxNSU ?? json.ultimoNSU ?? ultimoNSU);
+    const ultimoNSU = Number(
+      json.ultimoNSU ?? json.UltimoNSU ?? json.NsuMaximo ?? json.nsuMaximo ?? maxNsuDoc,
+    );
+    const maxNSU = Number(
+      json.maxNSU ?? json.MaxNSU ?? json.NsuMaximo ?? json.nsuMaximo ?? json.ultimoNSU ?? ultimoNSU,
+    );
 
-    return { status, ultimoNSU, maxNSU, documentos, rawBody: body };
+    return {
+      status,
+      ultimoNSU,
+      maxNSU,
+      documentos,
+      semDocumentos,
+      statusProcessamento: statusProc,
+      erros,
+      rawBody: body,
+    };
   }
 
   private mapItem(item: any): AdnDfeItem | null {
