@@ -41,10 +41,11 @@ export class NfseController {
     @Query('cnpj') cnpj?: string,
     @Query('dataInicio') dataInicio?: string,
     @Query('dataFim') dataFim?: string,
+    @Query('papel') papel?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.service.listar({ numero, cnpj, dataInicio, dataFim, page, pageSize });
+    return this.service.listar({ numero, cnpj, dataInicio, dataFim, papel, page, pageSize });
   }
 
   /** Detalhe completo de uma NFS-e (todos os dados + eventos + XML). */

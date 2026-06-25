@@ -278,15 +278,27 @@ export class NfseDistService {
     cnpj?: string;
     dataInicio?: string;
     dataFim?: string;
+    papel?: string;
     page?: string;
     pageSize?: string;
   }) {
     const where: any = {};
-    if (filtros.numero) where.numero = { contains: filtros.numero.trim() };
-    if (filtros.cnpj) {
-      const c = filtros.cnpj.replace(/\D/g, '');
+    const root = (process.env.NFSE_ADN_CNPJ || '').replace(/\D/g, '').slice(0, 8);
+    const prestados = (filtros.papel || '').toUpperCase() === 'PRESTADOS';
+    const c = (filtros.cnpj || '').replace(/\D/g, '');
+
+    // Tomados (padrão): minha empresa é o TOMADOR; contraparte filtrada = prestador.
+    // Prestados: minha empresa é o PRESTADOR; contraparte filtrada = tomador.
+    // Casa por RAIZ do CNPJ (8 díg.) p/ cobrir filiais do grupo.
+    if (prestados) {
+      if (root) where.cnpj_prestador = { startsWith: root };
+      if (c) where.cnpj_tomador = { contains: c };
+    } else {
+      if (root) where.cnpj_tomador = { startsWith: root };
       if (c) where.cnpj_prestador = { contains: c };
     }
+
+    if (filtros.numero) where.numero = { contains: filtros.numero.trim() };
     if (filtros.dataInicio || filtros.dataFim) {
       where.data_emissao = {};
       if (filtros.dataInicio) where.data_emissao.gte = new Date(`${filtros.dataInicio}T00:00:00`);
@@ -319,7 +331,142 @@ export class NfseDistService {
     return {
       ...this.serializar(doc),
       xml: doc.xml,
+      detalhado: await this.detalhar(doc.xml).catch(() => null),
       eventos: eventos.map((e) => ({ ...e, nsu: e.nsu.toString() })),
+    };
+  }
+
+  /** Extrai a NFS-e em blocos estruturados (partes, serviço, valores e IMPOSTOS). */
+  private async detalhar(xml: string): Promise<any> {
+    if (!xml) return null;
+    const obj: any = await parseStringPromise(xml, {
+      explicitArray: false,
+      ignoreAttrs: false,
+      tagNameProcessors: [(name) => name.replace(/^.*:/, '')],
+    });
+
+    const root = obj?.NFSe || obj?.nfse || obj;
+    const inf = root?.infNFSe || root?.InfNFSe || {};
+    const emit = inf?.emit || {};
+    const valN = inf?.valores || {}; // valores efetivos da NFS-e (vBC, pAliqAplic, vISSQN, vLiq)
+    const dps = inf?.DPS?.infDPS || inf?.DPS || {};
+    const prest = dps?.prest || {};
+    const toma = dps?.toma || {};
+    const serv = dps?.serv || {};
+    const cServ = serv?.cServ || {};
+    const valD = dps?.valores || {}; // valores declarados na DPS (trib, totTrib)
+    const trib = valD?.trib || {};
+    const tribMun = trib?.tribMun || {};
+    const tribFed = trib?.tribFed || {};
+    const pisCofins = tribFed?.piscofins || tribFed?.PisCofins || {};
+    const totTrib = trib?.totTrib?.vTotTrib || {};
+
+    const n = (v: any): number | null => {
+      if (v == null) return null;
+      const x = Number(String(v).replace(',', '.'));
+      return Number.isFinite(x) ? x : null;
+    };
+    const ender = (e: any) =>
+      e
+        ? {
+            logradouro: e.xLgr,
+            numero: e.nro,
+            complemento: e.xCpl,
+            bairro: e.xBairro,
+            municipio: e.enderNac?.cMun || e.endNac?.cMun || e.cMun,
+            uf: e.UF || e.enderNac?.UF,
+            cep: e.CEP || e.enderNac?.CEP || e.endNac?.CEP,
+          }
+        : null;
+
+    const TRIB_ISSQN: Record<string, string> = {
+      '1': 'Operação tributável',
+      '2': 'Exportação de serviços',
+      '3': 'Não incidência',
+      '4': 'Imunidade',
+      '5': 'Exigibilidade suspensa (judicial)',
+      '6': 'Exigibilidade suspensa (administrativa)',
+    };
+    const RET_ISSQN: Record<string, string> = {
+      '1': 'Não retido',
+      '2': 'Retido pelo tomador',
+      '3': 'Retido pelo intermediário',
+    };
+    const SIMPLES: Record<string, string> = {
+      '1': 'Não optante',
+      '2': 'Optante - MEI',
+      '3': 'Optante - ME/EPP',
+    };
+
+    return {
+      identificacao: {
+        numero: inf?.nNFSe,
+        serie: dps?.serie,
+        dhProcessamento: inf?.dhProc,
+        dhEmissao: dps?.dhEmi,
+        competencia: dps?.dCompet,
+        situacaoCodigo: inf?.cStat,
+        nDFSe: inf?.nDFSe,
+        localEmissao: inf?.xLocEmi,
+        localPrestacao: inf?.xLocPrestacao,
+        localIncidencia: inf?.xLocIncid,
+        codTribNacional: cServ?.cTribNac,
+        descTribNacional: inf?.xTribNac,
+      },
+      prestador: {
+        cnpj: emit?.CNPJ || emit?.CPF,
+        inscricaoMunicipal: emit?.IM,
+        nome: emit?.xNome,
+        fone: emit?.fone,
+        email: emit?.email,
+        endereco: ender(emit?.enderNac ? emit : null) || ender(emit),
+        simplesNacional: SIMPLES[String(prest?.regTrib?.opSimpNac)] || prest?.regTrib?.opSimpNac,
+        regimeEspecial: prest?.regTrib?.regEspTrib,
+      },
+      tomador: {
+        cnpj: toma?.CNPJ || toma?.CPF,
+        nome: toma?.xNome,
+        fone: toma?.fone,
+        email: toma?.email,
+        endereco: ender(toma?.end),
+      },
+      servico: {
+        codTribNacional: cServ?.cTribNac,
+        descricao: cServ?.xDescServ,
+        cNBS: cServ?.cNBS,
+        codLocalPrestacao: serv?.locPrest?.cLocPrestacao,
+      },
+      valores: {
+        valorServico: n(valD?.vServPrest?.vServ) ?? n(valN?.vServ),
+        baseCalculo: n(valN?.vBC),
+        aliquota: n(valN?.pAliqAplic),
+        valorIssqn: n(valN?.vISSQN),
+        valorLiquido: n(valN?.vLiq),
+        descontoIncondicionado: n(valD?.vServPrest?.vDescCondIncond?.vDescIncond),
+        descontoCondicionado: n(valD?.vServPrest?.vDescCondIncond?.vDescCond),
+      },
+      impostos: {
+        issqn: {
+          tributacao: TRIB_ISSQN[String(tribMun?.tribISSQN)] || tribMun?.tribISSQN,
+          retencao: RET_ISSQN[String(tribMun?.tpRetISSQN)] || tribMun?.tpRetISSQN,
+          baseCalculo: n(valN?.vBC),
+          aliquota: n(valN?.pAliqAplic),
+          valor: n(valN?.vISSQN),
+          municipioIncidencia: inf?.xLocIncid,
+        },
+        federais: {
+          pis: n(pisCofins?.vPis ?? tribFed?.vPis),
+          cofins: n(pisCofins?.vCofins ?? tribFed?.vCofins),
+          irrf: n(tribFed?.vRetIRRF ?? tribFed?.vIRRF),
+          csll: n(tribFed?.vRetCSLL ?? tribFed?.vCSLL),
+          inss: n(tribFed?.vRetCP ?? tribFed?.vINSS ?? tribFed?.vCP),
+        },
+        totalTributos: {
+          federal: n(totTrib?.vTotTribFed),
+          estadual: n(totTrib?.vTotTribEst),
+          municipal: n(totTrib?.vTotTribMun),
+        },
+      },
     };
   }
 
