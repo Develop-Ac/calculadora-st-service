@@ -772,12 +772,15 @@ export class IcmsService {
                 .map((k) => `'${String(k).replace(/'/g, "''")}'`)
                 .join(',');
 
+            // STATUS=1 = Concluída. Cancelada (2) não conta como lançada — assim o
+            // sync marca como EXCLUIDA quem teve o lançamento cancelado.
             const sql = `
       SELECT
           E.CHAVE_NFE,
           E.DT_ENTRADA
       FROM NF_ENTRADA E
       WHERE E.EMPRESA = 1
+        AND E.STATUS = 1
         AND E.CHAVE_NFE IN (${inList})
     `;
 
@@ -2524,11 +2527,14 @@ export class IcmsService {
         itens: any[];
     } | null> {
         const safeChave = String(chaveNfe).replace(/'/g, "''");
+        // STATUS=1 = Concluída (lançamento ativo); STATUS=2 = Cancelada. Num
+        // relançamento há 2 linhas (1 e 2) — pegamos a concluída mais recente.
         const headSql = `
       SELECT FIRST 1 NFE, NOTA_FISCAL, SERIE, MODELO_NOTA, FOR_CODIGO, CHAVE_NFE,
              TOTAL_NOTA, DT_EMISSAO, DT_ENTRADA, OPF_CODIGO
       FROM NF_ENTRADA
-      WHERE EMPRESA = 1 AND CHAVE_NFE = '${safeChave}'
+      WHERE EMPRESA = 1 AND CHAVE_NFE = '${safeChave}' AND STATUS = 1
+      ORDER BY NFE DESC
     `;
         const headRows = await this.openQuery.query<any>(
             `SELECT * FROM OPENQUERY(CONSULTA, '${headSql.replace(/'/g, "''")}')`,

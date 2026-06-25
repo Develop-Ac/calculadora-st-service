@@ -653,6 +653,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
           E.DT_ENTRADA
       FROM NF_ENTRADA E
       WHERE E.EMPRESA = 1
+        AND E.STATUS = 1
         AND E.CHAVE_NFE IN (${inList})
     `;
             const firebirdSql = sql.replace(/'/g, "''");
@@ -2065,7 +2066,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
       SELECT FIRST 1 NFE, NOTA_FISCAL, SERIE, MODELO_NOTA, FOR_CODIGO, CHAVE_NFE,
              TOTAL_NOTA, DT_EMISSAO, DT_ENTRADA, OPF_CODIGO
       FROM NF_ENTRADA
-      WHERE EMPRESA = 1 AND CHAVE_NFE = '${safeChave}'
+      WHERE EMPRESA = 1 AND CHAVE_NFE = '${safeChave}' AND STATUS = 1
+      ORDER BY NFE DESC
     `;
         const headRows = await this.openQuery.query(`SELECT * FROM OPENQUERY(CONSULTA, '${headSql.replace(/'/g, "''")}')`, {}, { timeout: 300000, allowZeroRows: true });
         const header = headRows[0];
