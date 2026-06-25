@@ -88,6 +88,13 @@ let IcmsController = class IcmsController {
         }
         return detalhe;
     }
+    async adicionarRessalva(chaveNfe, body) {
+        var _a;
+        return this.service.adicionarRessalva(chaveNfe, Number((_a = body === null || body === void 0 ? void 0 : body.nItem) !== null && _a !== void 0 ? _a : 0), body === null || body === void 0 ? void 0 : body.motivo, body === null || body === void 0 ? void 0 : body.usuario);
+    }
+    async removerRessalva(chaveNfe, nItem) {
+        return this.service.removerRessalva(chaveNfe, Number(nItem));
+    }
     async reconferirAuditoria(chaveNfe) {
         const detalhe = await this.service.reconferirAuditoria(chaveNfe);
         if (!detalhe) {
@@ -273,6 +280,22 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "getAuditoria", null);
+__decorate([
+    (0, common_1.Post)('auditoria/:chaveNfe/ressalva'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "adicionarRessalva", null);
+__decorate([
+    (0, common_1.Delete)('auditoria/:chaveNfe/ressalva/:nItem'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __param(1, (0, common_1.Param)('nItem')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "removerRessalva", null);
 __decorate([
     (0, common_1.Post)('auditoria/:chaveNfe/reconferir'),
     __param(0, (0, common_1.Param)('chaveNfe')),

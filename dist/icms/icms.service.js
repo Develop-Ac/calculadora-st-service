@@ -2248,6 +2248,22 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         return erros;
     }
+    async getRessalvasMap(chaveNfe) {
+        var _a;
+        const m = new Map();
+        try {
+            const rows = await this.prisma.$queryRawUnsafe(`SELECT n_item, motivo FROM com_nfe_ressalva WHERE chave_nfe = $1`, chaveNfe);
+            for (const r of rows)
+                m.set(Number(r.n_item), (_a = r.motivo) !== null && _a !== void 0 ? _a : null);
+        }
+        catch (_b) {
+        }
+        return m;
+    }
+    escopoNItem(e) {
+        var _a;
+        return e.escopo === 'CABECALHO' ? 0 : ((_a = e.nItem) !== null && _a !== void 0 ? _a : 0);
+    }
     async auditarLancamentoFiscal(chaveNfe, opts = {}) {
         var _a, _b, _c;
         const enviarAlerta = opts.enviarAlerta !== false;
@@ -2260,7 +2276,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
             if (!r)
                 return;
             const erros = this.errosFromComputado(r);
-            const status = erros.length > 0 ? 'DIVERGENTE' : 'OK';
+            const ressalvas = await this.getRessalvasMap(chaveNfe);
+            const errosEfetivos = erros.filter((e) => !ressalvas.has(this.escopoNItem(e)));
+            const status = errosEfetivos.length > 0 ? 'DIVERGENTE' : 'OK';
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
                 data: { auditoria_fiscal_em: new Date(), auditoria_fiscal_status: status },
@@ -2272,7 +2290,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                      ON CONFLICT (chave_nfe, n_item, campo) DO UPDATE
                        SET esperado = EXCLUDED.esperado, encontrado = EXCLUDED.encontrado, mensagem = EXCLUDED.mensagem`, chaveNfe, (_a = e.nItem) !== null && _a !== void 0 ? _a : 0, e.campo, (_b = e.esperado) !== null && _b !== void 0 ? _b : null, (_c = e.encontrado) !== null && _c !== void 0 ? _c : null, e.mensagem);
             }
-            if (enviarAlerta && erros.length > 0 && !(nfeRow === null || nfeRow === void 0 ? void 0 : nfeRow.auditoria_alerta_em)) {
+            if (enviarAlerta && errosEfetivos.length > 0 && !(nfeRow === null || nfeRow === void 0 ? void 0 : nfeRow.auditoria_alerta_em)) {
                 const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
                 if (!webhook) {
                     this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
@@ -2286,8 +2304,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
                         ufEmitente: r.nota.ufEmitente,
                         dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
                         statusAuditoria: status,
-                        totalErros: erros.length,
-                        erros,
+                        totalErros: errosEfetivos.length,
+                        erros: errosEfetivos,
                     };
                     const resp = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (resp.ok) {
@@ -2378,15 +2396,27 @@ let IcmsService = IcmsService_1 = class IcmsService {
         const offset = (page - 1) * pageSize;
         const totalRows = await this.prisma.$queryRawUnsafe(`SELECT count(*)::int AS total FROM com_nfe_conciliacao c WHERE ${where}`, ...params);
         const total = (_b = (_a = totalRows[0]) === null || _a === void 0 ? void 0 : _a.total) !== null && _b !== void 0 ? _b : 0;
-        const rows = await this.prisma.$queryRawUnsafe(`SELECT c.chave_nfe, c.emitente, c.cnpj_emitente, c.data_emissao, c.dt_entrada,
-                    c.valor_total, c.auditoria_fiscal_status, c.auditoria_fiscal_em,
-                    substring(c.chave_nfe from 26 for 9) AS numero,
-                    left(c.chave_nfe, 2) AS cuf,
-                    (SELECT count(*)::int FROM com_nfe_auditoria_item a WHERE a.chave_nfe = c.chave_nfe) AS total_erros
-             FROM com_nfe_conciliacao c
-             WHERE ${where}
-             ORDER BY c.dt_entrada DESC NULLS LAST, c.data_emissao DESC
-             LIMIT ${pageSize} OFFSET ${offset}`, ...params);
+        const buildRows = (comRessalva) => `
+            SELECT c.chave_nfe, c.emitente, c.cnpj_emitente, c.data_emissao, c.dt_entrada,
+                   c.valor_total, c.auditoria_fiscal_status, c.auditoria_fiscal_em,
+                   substring(c.chave_nfe from 26 for 9) AS numero,
+                   left(c.chave_nfe, 2) AS cuf,
+                   (SELECT count(*)::int FROM com_nfe_auditoria_item a
+                     WHERE a.chave_nfe = c.chave_nfe
+                       ${comRessalva ? 'AND NOT EXISTS (SELECT 1 FROM com_nfe_ressalva rs WHERE rs.chave_nfe = a.chave_nfe AND rs.n_item = a.n_item)' : ''}
+                   ) AS total_erros,
+                   ${comRessalva ? 'EXISTS (SELECT 1 FROM com_nfe_ressalva r2 WHERE r2.chave_nfe = c.chave_nfe)' : 'false'} AS tem_ressalva
+            FROM com_nfe_conciliacao c
+            WHERE ${where}
+            ORDER BY c.dt_entrada DESC NULLS LAST, c.data_emissao DESC
+            LIMIT ${pageSize} OFFSET ${offset}`;
+        let rows;
+        try {
+            rows = await this.prisma.$queryRawUnsafe(buildRows(true), ...params);
+        }
+        catch (_c) {
+            rows = await this.prisma.$queryRawUnsafe(buildRows(false), ...params);
+        }
         return {
             page, pageSize, total,
             items: rows.map((r) => {
@@ -2404,6 +2434,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     status: (_b = r.auditoria_fiscal_status) !== null && _b !== void 0 ? _b : 'PENDENTE',
                     auditadoEm: r.auditoria_fiscal_em,
                     totalErros: (_c = r.total_erros) !== null && _c !== void 0 ? _c : 0,
+                    temRessalva: !!r.tem_ressalva,
                 });
             }),
         };
@@ -2443,20 +2474,28 @@ let IcmsService = IcmsService_1 = class IcmsService {
             };
         }
         const contaErros = (cks) => cks.filter((c) => !c.ok).length;
-        const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
+        const ressalvas = await this.getRessalvasMap(chaveNfe);
+        const errosCab = ressalvas.has(0) ? 0 : contaErros(r.cabecalho);
+        const totalErros = errosCab + r.itens.reduce((s, it) => s + (ressalvas.has(it.nItem) ? 0 : contaErros(it.checks)), 0);
         const status = totalErros > 0 ? 'DIVERGENTE' : 'OK';
         return {
-            header: Object.assign(Object.assign({}, baseHeader), { status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false }),
-            cabecalho: r.cabecalho,
-            itens: r.itens.map((it) => ({
-                nItem: it.nItem,
-                proCodigo: it.proCodigo,
-                descricao: it.descricao,
-                imposto: it.imposto,
-                destinacao: it.destinacao,
-                totalErros: contaErros(it.checks),
-                checks: it.checks,
-            })),
+            header: Object.assign(Object.assign({}, baseHeader), { status,
+                totalErros, semConferencia: r.semConferencia, naoAuditavel: false, temRessalva: ressalvas.size > 0 }),
+            cabecalho: r.cabecalho.map((c) => (Object.assign(Object.assign({}, c), { ressalvado: ressalvas.has(0) }))),
+            itens: r.itens.map((it) => {
+                var _a;
+                return ({
+                    nItem: it.nItem,
+                    proCodigo: it.proCodigo,
+                    descricao: it.descricao,
+                    imposto: it.imposto,
+                    destinacao: it.destinacao,
+                    totalErros: contaErros(it.checks),
+                    ressalvado: ressalvas.has(it.nItem),
+                    ressalvaMotivo: (_a = ressalvas.get(it.nItem)) !== null && _a !== void 0 ? _a : null,
+                    checks: it.checks,
+                });
+            }),
         };
     }
     async reconferirAuditoria(chaveNfe) {
@@ -2465,6 +2504,19 @@ let IcmsService = IcmsService_1 = class IcmsService {
             await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
         }
         return this.getAuditoriaDetalhe(chaveNfe, true);
+    }
+    async adicionarRessalva(chaveNfe, nItem, motivo, usuario) {
+        await this.prisma.$executeRawUnsafe(`INSERT INTO com_nfe_ressalva (chave_nfe, n_item, motivo, criado_por)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (chave_nfe, n_item) DO UPDATE
+               SET motivo = EXCLUDED.motivo, criado_por = EXCLUDED.criado_por, created_at = now()`, chaveNfe, Number(nItem) || 0, motivo !== null && motivo !== void 0 ? motivo : null, usuario !== null && usuario !== void 0 ? usuario : null);
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
+        return this.getAuditoriaDetalhe(chaveNfe);
+    }
+    async removerRessalva(chaveNfe, nItem) {
+        await this.prisma.$executeRawUnsafe(`DELETE FROM com_nfe_ressalva WHERE chave_nfe = $1 AND n_item = $2`, chaveNfe, Number(nItem) || 0);
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
+        return this.getAuditoriaDetalhe(chaveNfe);
     }
     async savePaymentStatus(dto) {
         let fiscalConference = null;

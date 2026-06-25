@@ -176,6 +176,8 @@ export declare class IcmsService {
     private reconciliarStatusEntrada;
     private computarAuditoria;
     private errosFromComputado;
+    private getRessalvasMap;
+    private escopoNItem;
     private auditarLancamentoFiscal;
     private static readonly CUF_SIGLA;
     private cufToSigla;
@@ -219,6 +221,7 @@ export declare class IcmsService {
             status: any;
             auditadoEm: any;
             totalErros: any;
+            temRessalva: boolean;
         }[];
     }>;
     getAuditoriaDetalhe(chaveNfe: string, direto?: boolean): Promise<{
@@ -249,6 +252,7 @@ export declare class IcmsService {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            temRessalva: boolean;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -262,13 +266,7 @@ export declare class IcmsService {
             statusErp: any;
             auditadoEm: any;
         };
-        cabecalho: {
-            campo: string;
-            esperado: string | null;
-            encontrado: string | null;
-            ok: boolean;
-            mensagem?: string;
-        }[];
+        cabecalho: any[];
         itens: {
             nItem: number;
             proCodigo: string;
@@ -276,6 +274,8 @@ export declare class IcmsService {
             imposto: string;
             destinacao: string;
             totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
             checks: {
                 campo: string;
                 esperado: string | null;
@@ -313,6 +313,7 @@ export declare class IcmsService {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            temRessalva: boolean;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -326,13 +327,7 @@ export declare class IcmsService {
             statusErp: any;
             auditadoEm: any;
         };
-        cabecalho: {
-            campo: string;
-            esperado: string | null;
-            encontrado: string | null;
-            ok: boolean;
-            mensagem?: string;
-        }[];
+        cabecalho: any[];
         itens: {
             nItem: number;
             proCodigo: string;
@@ -340,6 +335,130 @@ export declare class IcmsService {
             imposto: string;
             destinacao: string;
             totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
+        }[];
+    }>;
+    adicionarRessalva(chaveNfe: string, nItem: number, motivo?: string, usuario?: string): Promise<{
+        header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            mensagem: string;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            temRessalva: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: {
+            nItem: number;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
+        }[];
+    }>;
+    removerRessalva(chaveNfe: string, nItem: number): Promise<{
+        header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            mensagem: string;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            temRessalva: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: {
+            nItem: number;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
             checks: {
                 campo: string;
                 esperado: string | null;

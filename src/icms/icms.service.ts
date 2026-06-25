@@ -2766,6 +2766,25 @@ export class IcmsService {
         return erros;
     }
 
+    /** Itens ressalvados (OK por intervenção) de uma NF. Map n_item -> motivo. */
+    private async getRessalvasMap(chaveNfe: string): Promise<Map<number, string | null>> {
+        const m = new Map<number, string | null>();
+        try {
+            const rows = await this.prisma.$queryRawUnsafe<any[]>(
+                `SELECT n_item, motivo FROM com_nfe_ressalva WHERE chave_nfe = $1`,
+                chaveNfe,
+            );
+            for (const r of rows) m.set(Number(r.n_item), r.motivo ?? null);
+        } catch {
+            // tabela ainda não criada
+        }
+        return m;
+    }
+
+    private escopoNItem(e: { escopo: string; nItem?: number }): number {
+        return e.escopo === 'CABECALHO' ? 0 : (e.nItem ?? 0);
+    }
+
     /**
      * Audita o lançamento de uma NF que virou LANCADA: persiste o resultado e,
      * havendo erro, alerta o grupo via n8n/WAHA. Nunca lança; alerta 1x por NF.
@@ -2781,7 +2800,10 @@ export class IcmsService {
             if (!r) return;
 
             const erros = this.errosFromComputado(r);
-            const status = erros.length > 0 ? 'DIVERGENTE' : 'OK';
+            // Itens/cabeçalho ressalvados (OK por intervenção) não contam no status.
+            const ressalvas = await this.getRessalvasMap(chaveNfe);
+            const errosEfetivos = erros.filter((e) => !ressalvas.has(this.escopoNItem(e)));
+            const status = errosEfetivos.length > 0 ? 'DIVERGENTE' : 'OK';
 
             await this.prisma.nfeConciliacao.update({
                 where: { chave_nfe: chaveNfe },
@@ -2798,7 +2820,7 @@ export class IcmsService {
                 );
             }
 
-            if (enviarAlerta && erros.length > 0 && !nfeRow?.auditoria_alerta_em) {
+            if (enviarAlerta && errosEfetivos.length > 0 && !nfeRow?.auditoria_alerta_em) {
                 const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
                 if (!webhook) {
                     this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
@@ -2811,8 +2833,8 @@ export class IcmsService {
                         ufEmitente: r.nota.ufEmitente,
                         dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
                         statusAuditoria: status,
-                        totalErros: erros.length,
-                        erros,
+                        totalErros: errosEfetivos.length,
+                        erros: errosEfetivos,
                     };
                     const resp = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (resp.ok) {
@@ -2926,18 +2948,28 @@ export class IcmsService {
         );
         const total = totalRows[0]?.total ?? 0;
 
-        const rows = await this.prisma.$queryRawUnsafe<any[]>(
-            `SELECT c.chave_nfe, c.emitente, c.cnpj_emitente, c.data_emissao, c.dt_entrada,
-                    c.valor_total, c.auditoria_fiscal_status, c.auditoria_fiscal_em,
-                    substring(c.chave_nfe from 26 for 9) AS numero,
-                    left(c.chave_nfe, 2) AS cuf,
-                    (SELECT count(*)::int FROM com_nfe_auditoria_item a WHERE a.chave_nfe = c.chave_nfe) AS total_erros
-             FROM com_nfe_conciliacao c
-             WHERE ${where}
-             ORDER BY c.dt_entrada DESC NULLS LAST, c.data_emissao DESC
-             LIMIT ${pageSize} OFFSET ${offset}`,
-            ...params,
-        );
+        // total_erros desconsidera itens ressalvados; tem_ressalva sinaliza intervenção.
+        // Protegido caso a tabela com_nfe_ressalva ainda não exista.
+        const buildRows = (comRessalva: boolean) => `
+            SELECT c.chave_nfe, c.emitente, c.cnpj_emitente, c.data_emissao, c.dt_entrada,
+                   c.valor_total, c.auditoria_fiscal_status, c.auditoria_fiscal_em,
+                   substring(c.chave_nfe from 26 for 9) AS numero,
+                   left(c.chave_nfe, 2) AS cuf,
+                   (SELECT count(*)::int FROM com_nfe_auditoria_item a
+                     WHERE a.chave_nfe = c.chave_nfe
+                       ${comRessalva ? 'AND NOT EXISTS (SELECT 1 FROM com_nfe_ressalva rs WHERE rs.chave_nfe = a.chave_nfe AND rs.n_item = a.n_item)' : ''}
+                   ) AS total_erros,
+                   ${comRessalva ? 'EXISTS (SELECT 1 FROM com_nfe_ressalva r2 WHERE r2.chave_nfe = c.chave_nfe)' : 'false'} AS tem_ressalva
+            FROM com_nfe_conciliacao c
+            WHERE ${where}
+            ORDER BY c.dt_entrada DESC NULLS LAST, c.data_emissao DESC
+            LIMIT ${pageSize} OFFSET ${offset}`;
+        let rows: any[];
+        try {
+            rows = await this.prisma.$queryRawUnsafe<any[]>(buildRows(true), ...params);
+        } catch {
+            rows = await this.prisma.$queryRawUnsafe<any[]>(buildRows(false), ...params);
+        }
 
         return {
             page, pageSize, total,
@@ -2954,6 +2986,7 @@ export class IcmsService {
                 status: r.auditoria_fiscal_status ?? 'PENDENTE',
                 auditadoEm: r.auditoria_fiscal_em,
                 totalErros: r.total_erros ?? 0,
+                temRessalva: !!r.tem_ressalva,
             })),
         };
     }
@@ -3009,12 +3042,23 @@ export class IcmsService {
         }
 
         const contaErros = (cks: any[]) => cks.filter((c) => !c.ok).length;
-        const totalErros = contaErros(r.cabecalho) + r.itens.reduce((s, it) => s + contaErros(it.checks), 0);
+        const ressalvas = await this.getRessalvasMap(chaveNfe);
+        // Erros efetivos: itens/cabeçalho ressalvados não contam.
+        const errosCab = ressalvas.has(0) ? 0 : contaErros(r.cabecalho);
+        const totalErros =
+            errosCab + r.itens.reduce((s, it) => s + (ressalvas.has(it.nItem) ? 0 : contaErros(it.checks)), 0);
         const status = totalErros > 0 ? 'DIVERGENTE' : 'OK';
 
         return {
-            header: { ...baseHeader, status, totalErros, semConferencia: r.semConferencia, naoAuditavel: false },
-            cabecalho: r.cabecalho,
+            header: {
+                ...baseHeader,
+                status,
+                totalErros,
+                semConferencia: r.semConferencia,
+                naoAuditavel: false,
+                temRessalva: ressalvas.size > 0,
+            },
+            cabecalho: r.cabecalho.map((c: any) => ({ ...c, ressalvado: ressalvas.has(0) })),
             itens: r.itens.map((it) => ({
                 nItem: it.nItem,
                 proCodigo: it.proCodigo,
@@ -3022,6 +3066,8 @@ export class IcmsService {
                 imposto: it.imposto,
                 destinacao: it.destinacao,
                 totalErros: contaErros(it.checks),
+                ressalvado: ressalvas.has(it.nItem),
+                ressalvaMotivo: ressalvas.get(it.nItem) ?? null,
                 checks: it.checks,
             })),
         };
@@ -3036,6 +3082,29 @@ export class IcmsService {
             await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false, produtoDireto: true });
         }
         return this.getAuditoriaDetalhe(chaveNfe, true);
+    }
+
+    /** Marca um item (ou cabeçalho, n_item=0) como OK por intervenção (ressalva). */
+    async adicionarRessalva(chaveNfe: string, nItem: number, motivo?: string, usuario?: string) {
+        await this.prisma.$executeRawUnsafe(
+            `INSERT INTO com_nfe_ressalva (chave_nfe, n_item, motivo, criado_por)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (chave_nfe, n_item) DO UPDATE
+               SET motivo = EXCLUDED.motivo, criado_por = EXCLUDED.criado_por, created_at = now()`,
+            chaveNfe, Number(nItem) || 0, motivo ?? null, usuario ?? null,
+        );
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
+        return this.getAuditoriaDetalhe(chaveNfe);
+    }
+
+    /** Remove a ressalva de um item (volta a contar como divergência). */
+    async removerRessalva(chaveNfe: string, nItem: number) {
+        await this.prisma.$executeRawUnsafe(
+            `DELETE FROM com_nfe_ressalva WHERE chave_nfe = $1 AND n_item = $2`,
+            chaveNfe, Number(nItem) || 0,
+        );
+        await this.auditarLancamentoFiscal(chaveNfe, { enviarAlerta: false });
+        return this.getAuditoriaDetalhe(chaveNfe);
     }
 
     async savePaymentStatus(dto: {

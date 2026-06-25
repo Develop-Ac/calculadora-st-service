@@ -128,6 +128,19 @@ export class IcmsController {
         return detalhe;
     }
 
+    @Post('auditoria/:chaveNfe/ressalva')
+    async adicionarRessalva(
+        @Param('chaveNfe') chaveNfe: string,
+        @Body() body: { nItem?: number; motivo?: string; usuario?: string },
+    ) {
+        return this.service.adicionarRessalva(chaveNfe, Number(body?.nItem ?? 0), body?.motivo, body?.usuario);
+    }
+
+    @Delete('auditoria/:chaveNfe/ressalva/:nItem')
+    async removerRessalva(@Param('chaveNfe') chaveNfe: string, @Param('nItem') nItem: string) {
+        return this.service.removerRessalva(chaveNfe, Number(nItem));
+    }
+
     @Post('auditoria/:chaveNfe/reconferir')
     async reconferirAuditoria(@Param('chaveNfe') chaveNfe: string) {
         const detalhe = await this.service.reconferirAuditoria(chaveNfe);

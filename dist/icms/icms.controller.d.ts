@@ -103,6 +103,7 @@ export declare class IcmsController {
             status: any;
             auditadoEm: any;
             totalErros: any;
+            temRessalva: boolean;
         }[];
     }>;
     reconferirPeriodo(q?: string, emitente?: string, escopo?: string, status?: string, dtInicio?: string, dtFim?: string): Promise<{
@@ -138,6 +139,7 @@ export declare class IcmsController {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            temRessalva: boolean;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -151,13 +153,7 @@ export declare class IcmsController {
             statusErp: any;
             auditadoEm: any;
         };
-        cabecalho: {
-            campo: string;
-            esperado: string | null;
-            encontrado: string | null;
-            ok: boolean;
-            mensagem?: string;
-        }[];
+        cabecalho: any[];
         itens: {
             nItem: number;
             proCodigo: string;
@@ -165,6 +161,134 @@ export declare class IcmsController {
             imposto: string;
             destinacao: string;
             totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
+        }[];
+    }>;
+    adicionarRessalva(chaveNfe: string, body: {
+        nItem?: number;
+        motivo?: string;
+        usuario?: string;
+    }): Promise<{
+        header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            mensagem: string;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            temRessalva: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: {
+            nItem: number;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
+            checks: {
+                campo: string;
+                esperado: string | null;
+                encontrado: string | null;
+                ok: boolean;
+                mensagem?: string;
+            }[];
+        }[];
+    }>;
+    removerRessalva(chaveNfe: string, nItem: string): Promise<{
+        header: {
+            status: any;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            mensagem: string;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: any[];
+    } | {
+        header: {
+            status: string;
+            totalErros: number;
+            semConferencia: boolean;
+            naoAuditavel: boolean;
+            temRessalva: boolean;
+            chaveNfe: any;
+            numero: string;
+            serie: any;
+            emitente: any;
+            cnpj: any;
+            uf: string;
+            dentroEstado: boolean;
+            dataEmissao: any;
+            dtEntrada: any;
+            valorTotal: number;
+            statusErp: any;
+            auditadoEm: any;
+        };
+        cabecalho: any[];
+        itens: {
+            nItem: number;
+            proCodigo: string;
+            descricao: string;
+            imposto: string;
+            destinacao: string;
+            totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
             checks: {
                 campo: string;
                 esperado: string | null;
@@ -202,6 +326,7 @@ export declare class IcmsController {
             totalErros: number;
             semConferencia: boolean;
             naoAuditavel: boolean;
+            temRessalva: boolean;
             chaveNfe: any;
             numero: string;
             serie: any;
@@ -215,13 +340,7 @@ export declare class IcmsController {
             statusErp: any;
             auditadoEm: any;
         };
-        cabecalho: {
-            campo: string;
-            esperado: string | null;
-            encontrado: string | null;
-            ok: boolean;
-            mensagem?: string;
-        }[];
+        cabecalho: any[];
         itens: {
             nItem: number;
             proCodigo: string;
@@ -229,6 +348,8 @@ export declare class IcmsController {
             imposto: string;
             destinacao: string;
             totalErros: number;
+            ressalvado: boolean;
+            ressalvaMotivo: string;
             checks: {
                 campo: string;
                 esperado: string | null;

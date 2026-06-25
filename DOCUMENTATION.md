@@ -391,6 +391,15 @@ Contrato do webhook (intranet → n8n):
   `{ header, cabecalho[], itens[] }`. Cada item traz `proCodigo`, `descricao`,
   `imposto`, `destinacao` e `checks[]` com cada conferência marcada `ok: true|false`
   (mostra o que está correto **e** o que divergiu). O cabeçalho também vem como `checks`.
+* `POST /icms/auditoria/:chaveNfe/ressalva` — marca um item (`nItem`, 0=cabeçalho)
+  como **OK por intervenção** (body `{ nItem, motivo?, usuario? }`). Item ressalvado
+  não conta no status (tabela `com_nfe_ressalva`, script
+  `sql/2026-06-24_ressalvas_auditoria.sql`). Recalcula e devolve o detalhe.
+* `DELETE /icms/auditoria/:chaveNfe/ressalva/:nItem` — remove a ressalva.
+
+  Na tela: botão **Ressalvar** por item (com motivo opcional); itens ressalvados
+  ficam com badge âmbar "Ressalva" e a nota mostra "Com ressalva". O alerta de
+  WhatsApp e o status consideram só as divergências **não** ressalvadas.
 * `POST /icms/auditoria/:chaveNfe/reconferir` — **reexecuta a auditoria manualmente
   sem disparar o WhatsApp** (`auditarLancamentoFiscal(chave, { enviarAlerta: false })`)
   e devolve o detalhe atualizado.
