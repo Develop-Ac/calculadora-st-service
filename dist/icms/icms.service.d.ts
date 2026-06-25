@@ -179,6 +179,13 @@ export declare class IcmsService {
     private getRessalvasMap;
     private escopoNItem;
     private auditarLancamentoFiscal;
+    private montarPayloadAuditoria;
+    enviarAlertaAuditoria(chaveNfe: string): Promise<{
+        enviado: boolean;
+        totalErros: number;
+        status: 'OK' | 'DIVERGENTE';
+        motivo?: string;
+    } | null>;
     private static readonly CUF_SIGLA;
     private cufToSigla;
     private resolveJanelaEntrada;

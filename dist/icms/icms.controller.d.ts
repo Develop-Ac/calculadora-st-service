@@ -359,6 +359,12 @@ export declare class IcmsController {
             }[];
         }[];
     }>;
+    enviarAlertaAuditoria(chaveNfe: string): Promise<{
+        enviado: boolean;
+        totalErros: number;
+        status: "OK" | "DIVERGENTE";
+        motivo?: string;
+    }>;
     getFiscalRegras(): Promise<{
         regras: any[];
         opf: any[];

@@ -150,6 +150,15 @@ export class IcmsController {
         return detalhe;
     }
 
+    @Post('auditoria/:chaveNfe/enviar-whatsapp')
+    async enviarAlertaAuditoria(@Param('chaveNfe') chaveNfe: string) {
+        const r = await this.service.enviarAlertaAuditoria(chaveNfe);
+        if (r === null) {
+            throw new NotFoundException(`NF não encontrada ou sem XML completo para auditar: ${chaveNfe}`);
+        }
+        return r;
+    }
+
     // ---- Regras fiscais configuráveis (modal da aba Conferência Fiscal) ----
 
     @Get('fiscal-regras')

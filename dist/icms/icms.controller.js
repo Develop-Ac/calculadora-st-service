@@ -102,6 +102,13 @@ let IcmsController = class IcmsController {
         }
         return detalhe;
     }
+    async enviarAlertaAuditoria(chaveNfe) {
+        const r = await this.service.enviarAlertaAuditoria(chaveNfe);
+        if (r === null) {
+            throw new common_1.NotFoundException(`NF não encontrada ou sem XML completo para auditar: ${chaveNfe}`);
+        }
+        return r;
+    }
     async getFiscalRegras() {
         return this.service.getFiscalRegras();
     }
@@ -303,6 +310,13 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "reconferirAuditoria", null);
+__decorate([
+    (0, common_1.Post)('auditoria/:chaveNfe/enviar-whatsapp'),
+    __param(0, (0, common_1.Param)('chaveNfe')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "enviarAlertaAuditoria", null);
 __decorate([
     (0, common_1.Get)('fiscal-regras'),
     __metadata("design:type", Function),

@@ -2296,17 +2296,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     this.logger.warn('N8N_AUDITORIA_WEBHOOK_URL não configurada: pulando alerta de auditoria.', 'Auditoria');
                 }
                 else {
-                    const payload = {
-                        chaveNfe,
-                        numeroNf: r.nota.numero,
-                        serie: r.nota.serie,
-                        emitente: r.nota.emitente,
-                        ufEmitente: r.nota.ufEmitente,
-                        dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
-                        statusAuditoria: status,
-                        totalErros: errosEfetivos.length,
-                        erros: errosEfetivos,
-                    };
+                    const payload = this.montarPayloadAuditoria(chaveNfe, r, status, errosEfetivos, 'automatico');
                     const resp = await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                     if (resp.ok) {
                         await this.prisma.nfeConciliacao.update({ where: { chave_nfe: chaveNfe }, data: { auditoria_alerta_em: new Date() } });
@@ -2321,6 +2311,51 @@ let IcmsService = IcmsService_1 = class IcmsService {
         catch (e) {
             this.logger.error(`Falha ao auditar lançamento ${chaveNfe}`, e instanceof Error ? e.stack : String(e), 'Auditoria');
         }
+    }
+    montarPayloadAuditoria(chaveNfe, r, status, errosEfetivos, origem = 'automatico') {
+        return {
+            chaveNfe,
+            numeroNf: r.nota.numero,
+            serie: r.nota.serie,
+            emitente: r.nota.emitente,
+            ufEmitente: r.nota.ufEmitente,
+            dtEntrada: r.header.DT_ENTRADA ? new Date(r.header.DT_ENTRADA).toISOString().slice(0, 10) : null,
+            statusAuditoria: status,
+            totalErros: errosEfetivos.length,
+            erros: errosEfetivos,
+            origem,
+        };
+    }
+    async enviarAlertaAuditoria(chaveNfe) {
+        const r = await this.computarAuditoria(chaveNfe, { produtoDireto: true });
+        if (!r)
+            return null;
+        const erros = this.errosFromComputado(r);
+        const ressalvas = await this.getRessalvasMap(chaveNfe);
+        const errosEfetivos = erros.filter((e) => !ressalvas.has(this.escopoNItem(e)));
+        const status = errosEfetivos.length > 0 ? 'DIVERGENTE' : 'OK';
+        if (errosEfetivos.length === 0) {
+            return { enviado: false, totalErros: 0, status, motivo: 'NF sem divergências — nada a enviar.' };
+        }
+        const webhook = process.env.N8N_AUDITORIA_WEBHOOK_URL;
+        if (!webhook) {
+            throw new Error('N8N_AUDITORIA_WEBHOOK_URL não configurada no serviço.');
+        }
+        const payload = this.montarPayloadAuditoria(chaveNfe, r, status, errosEfetivos, 'manual');
+        const resp = await fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            throw new Error(`n8n recusou o alerta de auditoria: HTTP ${resp.status}`);
+        }
+        await this.prisma.nfeConciliacao.update({
+            where: { chave_nfe: chaveNfe },
+            data: { auditoria_alerta_em: new Date() },
+        });
+        this.logger.log(`Alerta de auditoria (manual) enviado para ${chaveNfe} (${errosEfetivos.length} erro(s)).`, 'Auditoria');
+        return { enviado: true, totalErros: errosEfetivos.length, status };
     }
     cufToSigla(cuf) {
         var _a;
