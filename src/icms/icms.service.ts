@@ -2249,13 +2249,19 @@ export class IcmsService {
     // ---- Regras fiscais configuráveis (com cache) ----
 
     private fiscalRulesCache: { regras: any[]; opf: Map<string, string>; origem: Map<string, string>; cfops: any[] } | null = null;
+    private fiscalRulesCacheAt = 0;
+    private static readonly FISCAL_RULES_TTL_MS = 60_000;
 
     private invalidateFiscalRules() {
         this.fiscalRulesCache = null;
     }
 
     private async getFiscalRules() {
-        if (this.fiscalRulesCache) return this.fiscalRulesCache;
+        // Cache em memória com TTL curto: invalida na hora ao salvar (modal) e,
+        // se as regras mudarem direto no banco, se atualiza sozinho em até 60s.
+        if (this.fiscalRulesCache && Date.now() - this.fiscalRulesCacheAt < IcmsService.FISCAL_RULES_TTL_MS) {
+            return this.fiscalRulesCache;
+        }
         try {
             const regras = await this.prisma.$queryRawUnsafe<any[]>(`SELECT * FROM com_fiscal_regra WHERE ativo = true`);
             const opfRows = await this.prisma.$queryRawUnsafe<any[]>(`SELECT opf_codigo, destinacao FROM com_fiscal_opf_destinacao WHERE ativo = true`);
@@ -2276,6 +2282,7 @@ export class IcmsService {
             // Tabelas ainda não criadas → usa os defaults embutidos no código.
             this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map(), cfops: [] };
         }
+        this.fiscalRulesCacheAt = Date.now();
         return this.fiscalRulesCache;
     }
 

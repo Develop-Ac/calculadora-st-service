@@ -146,6 +146,8 @@ export declare class IcmsService {
     private destinacaoPorOpf;
     private pisCofinsEsperado;
     private fiscalRulesCache;
+    private fiscalRulesCacheAt;
+    private static readonly FISCAL_RULES_TTL_MS;
     private invalidateFiscalRules;
     private getFiscalRules;
     private cfopRegraEsperada;

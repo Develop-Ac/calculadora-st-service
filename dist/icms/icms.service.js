@@ -73,6 +73,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.launchedSyncJobs = new Map();
         this.xmlNormalizationJobs = new Map();
         this.fiscalRulesCache = null;
+        this.fiscalRulesCacheAt = 0;
         this.parseReferenceData();
     }
     parseReferenceData() {
@@ -1845,8 +1846,9 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.fiscalRulesCache = null;
     }
     async getFiscalRules() {
-        if (this.fiscalRulesCache)
+        if (this.fiscalRulesCache && Date.now() - this.fiscalRulesCacheAt < IcmsService_1.FISCAL_RULES_TTL_MS) {
             return this.fiscalRulesCache;
+        }
         try {
             const regras = await this.prisma.$queryRawUnsafe(`SELECT * FROM com_fiscal_regra WHERE ativo = true`);
             const opfRows = await this.prisma.$queryRawUnsafe(`SELECT opf_codigo, destinacao FROM com_fiscal_opf_destinacao WHERE ativo = true`);
@@ -1868,6 +1870,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         catch (_b) {
             this.fiscalRulesCache = { regras: [], opf: new Map(), origem: new Map(), cfops: [] };
         }
+        this.fiscalRulesCacheAt = Date.now();
         return this.fiscalRulesCache;
     }
     cfopRegraEsperada(rules, cfopFornecedor, destinacao, temCest) {
@@ -2825,6 +2828,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
 };
 exports.IcmsService = IcmsService;
 IcmsService.MVA_LIMIAR = 50.39;
+IcmsService.FISCAL_RULES_TTL_MS = 60000;
 IcmsService.CUF_SIGLA = {
     '11': 'RO', '12': 'AC', '13': 'AM', '14': 'RR', '15': 'PA', '16': 'AP', '17': 'TO',
     '21': 'MA', '22': 'PI', '23': 'CE', '24': 'RN', '25': 'PB', '26': 'PE', '27': 'AL', '28': 'SE', '29': 'BA',
