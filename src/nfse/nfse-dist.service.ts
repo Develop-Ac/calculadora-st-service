@@ -222,13 +222,14 @@ export class NfseDistService {
       return Number.isFinite(x) ? x : 0;
     };
     const tribFed = dps?.valores?.trib?.tribFed || {};
-    const pisCofins = tribFed?.piscofins || tribFed?.PisCofins || {};
+    const pisCofins = tribFed?.piscofins || {};
+    // PIS/COFINS só contam como RETIDOS quando tpRetPisCofins = 1 (senão é apuração própria).
+    const pisCofinsRetido = String(pisCofins?.tpRetPisCofins || '') === '1';
     const retencaoFederal =
-      num(pisCofins?.vPis ?? tribFed?.vPis) +
-      num(pisCofins?.vCofins ?? tribFed?.vCofins) +
-      num(tribFed?.vRetIRRF ?? tribFed?.vIRRF) +
-      num(tribFed?.vRetCSLL ?? tribFed?.vCSLL) +
-      num(tribFed?.vRetCP ?? tribFed?.vINSS ?? tribFed?.vCP);
+      num(tribFed?.vRetIRRF) +
+      num(tribFed?.vRetCP) +
+      num(tribFed?.vRetCSLL) +
+      (pisCofinsRetido ? num(pisCofins?.vPis) + num(pisCofins?.vCofins) : 0);
 
     return {
       tipo: ehEvento ? 'EVENTO' : 'NFSE',
@@ -379,7 +380,8 @@ export class NfseDistService {
     const trib = valD?.trib || {};
     const tribMun = trib?.tribMun || {};
     const tribFed = trib?.tribFed || {};
-    const pisCofins = tribFed?.piscofins || tribFed?.PisCofins || {};
+    const pisCofins = tribFed?.piscofins || {};
+    const pisCofinsRetido = String(pisCofins?.tpRetPisCofins || '') === '1';
     const totTrib = trib?.totTrib?.vTotTrib || {};
 
     const n = (v: any): number | null => {
@@ -476,11 +478,22 @@ export class NfseDistService {
           municipioIncidencia: inf?.xLocIncid,
         },
         federais: {
-          pis: n(pisCofins?.vPis ?? tribFed?.vPis),
-          cofins: n(pisCofins?.vCofins ?? tribFed?.vCofins),
-          irrf: n(tribFed?.vRetIRRF ?? tribFed?.vIRRF),
-          csll: n(tribFed?.vRetCSLL ?? tribFed?.vCSLL),
-          inss: n(tribFed?.vRetCP ?? tribFed?.vINSS ?? tribFed?.vCP),
+          // Retidos pelo tomador
+          irrf: n(tribFed?.vRetIRRF),
+          contribPrevidenciaria: n(tribFed?.vRetCP),
+          csllRetida: n(tribFed?.vRetCSLL),
+          pisRetido: pisCofinsRetido ? n(pisCofins?.vPis) : null,
+          cofinsRetido: pisCofinsRetido ? n(pisCofins?.vCofins) : null,
+          retidoTotal:
+            n(tribFed?.vRetIRRF) || n(tribFed?.vRetCP) || n(tribFed?.vRetCSLL) || pisCofinsRetido
+              ? (n(tribFed?.vRetIRRF) ?? 0) +
+                (n(tribFed?.vRetCP) ?? 0) +
+                (n(tribFed?.vRetCSLL) ?? 0) +
+                (pisCofinsRetido ? (n(pisCofins?.vPis) ?? 0) + (n(pisCofins?.vCofins) ?? 0) : 0)
+              : null,
+          // Apuração própria (não retido) — débito do prestador
+          pisProprio: pisCofinsRetido ? null : n(pisCofins?.vPis),
+          cofinsProprio: pisCofinsRetido ? null : n(pisCofins?.vCofins),
         },
         totalTributos: {
           federal: n(totTrib?.vTotTribFed),
