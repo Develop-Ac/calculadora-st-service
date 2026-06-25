@@ -2691,7 +2691,17 @@ export class IcmsService {
                         destinacao = inferido.destinacao;
                     }
                 }
-                if (intra && destinacaoIntra) destinacao = destinacaoIntra;
+                // Destinação POR ITEM, definida pelo SUBTIPO do cadastro:
+                //   00 -> comercialização   |   07 -> uso e consumo
+                // Antes vinha do OPF (por NOTA), o que classificava errado uma NF com
+                // itens mistos (ex.: 1 revenda + 1 uso/consumo). O SUBTIPO é por item e
+                // resolve isso. OPF (por nota) continua só como fallback p/ subtipos
+                // fora de 00/07.
+                const subItem = this.digitsOnly(prod?.SUBTIPO);
+                const destSubtipo =
+                    subItem === '00' ? 'COMERCIALIZACAO' : subItem === '07' ? 'USO_CONSUMO' : null;
+                if (destSubtipo) destinacao = destSubtipo;
+                else if (intra && destinacaoIntra) destinacao = destinacaoIntra;
 
                 const monofasico = this.isMonofasicoNcm(this.cleanDigits(notaItem?.ncm ?? ''));
                 const reg = this.regraEsperada(rules, imposto!, destinacao!, monofasico);

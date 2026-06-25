@@ -2181,7 +2181,11 @@ let IcmsService = IcmsService_1 = class IcmsService {
                         destinacao = inferido.destinacao;
                     }
                 }
-                if (intra && destinacaoIntra)
+                const subItem = this.digitsOnly(prod === null || prod === void 0 ? void 0 : prod.SUBTIPO);
+                const destSubtipo = subItem === '00' ? 'COMERCIALIZACAO' : subItem === '07' ? 'USO_CONSUMO' : null;
+                if (destSubtipo)
+                    destinacao = destSubtipo;
+                else if (intra && destinacaoIntra)
                     destinacao = destinacaoIntra;
                 const monofasico = this.isMonofasicoNcm(this.cleanDigits((_d = notaItem === null || notaItem === void 0 ? void 0 : notaItem.ncm) !== null && _d !== void 0 ? _d : ''));
                 const reg = this.regraEsperada(rules, imposto, destinacao, monofasico);
