@@ -186,6 +186,10 @@ export declare class IcmsService {
         status: 'OK' | 'DIVERGENTE';
         motivo?: string;
     } | null>;
+    private blocosErrosDoDetalhe;
+    private wahaEnviarTexto;
+    processarRespostasAjustadoWaha(): Promise<void>;
+    private marcarAjustadoProcessado;
     private static readonly CUF_SIGLA;
     private cufToSigla;
     private resolveJanelaEntrada;

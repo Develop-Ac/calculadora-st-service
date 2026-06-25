@@ -2357,6 +2357,134 @@ let IcmsService = IcmsService_1 = class IcmsService {
         this.logger.log(`Alerta de auditoria (manual) enviado para ${chaveNfe} (${errosEfetivos.length} erro(s)).`, 'Auditoria');
         return { enviado: true, totalErros: errosEfetivos.length, status };
     }
+    blocosErrosDoDetalhe(detalhe) {
+        var _a, _b, _c;
+        const fmt = (c) => {
+            var _a, _b;
+            return c.esperado != null || c.encontrado != null
+                ? `   • ${c.campo}: Errado ${(_a = c.encontrado) !== null && _a !== void 0 ? _a : '-'}. mudar para ${(_b = c.esperado) !== null && _b !== void 0 ? _b : '-'}`
+                : `   • ${c.mensagem || c.campo}`;
+        };
+        const blocos = [];
+        const cab = ((_a = detalhe === null || detalhe === void 0 ? void 0 : detalhe.cabecalho) !== null && _a !== void 0 ? _a : []).filter((c) => !c.ok && !c.ressalvado);
+        if (cab.length)
+            blocos.push(`• CABEÇALHO\n${cab.map(fmt).join('\n')}`);
+        for (const it of (_b = detalhe === null || detalhe === void 0 ? void 0 : detalhe.itens) !== null && _b !== void 0 ? _b : []) {
+            if (it.ressalvado)
+                continue;
+            const ck = ((_c = it.checks) !== null && _c !== void 0 ? _c : []).filter((c) => !c.ok);
+            if (!ck.length)
+                continue;
+            const key = it.proCodigo || `Item ${it.nItem}`;
+            blocos.push(`• PRODUTO: ${key}\n${ck.map(fmt).join('\n')}`);
+        }
+        return blocos.join('\n\n');
+    }
+    async wahaEnviarTexto(text, replyTo) {
+        const base = process.env.WAHA_BASE_URL;
+        const key = process.env.WAHA_API_KEY;
+        const session = process.env.WAHA_SESSION || 'default';
+        const group = process.env.WAHA_GROUP_CHAT_ID;
+        if (!base || !key || !group)
+            return;
+        const body = { session, chatId: group, text };
+        if (replyTo)
+            body.reply_to = replyTo;
+        await fetch(`${base.replace(/\/$/, '')}/api/sendText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Api-Key': key },
+            body: JSON.stringify(body),
+        });
+    }
+    async processarRespostasAjustadoWaha() {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q;
+        const base = process.env.WAHA_BASE_URL;
+        const key = process.env.WAHA_API_KEY;
+        const session = process.env.WAHA_SESSION || 'default';
+        const group = process.env.WAHA_GROUP_CHAT_ID;
+        if (!base || !key || !group) {
+            this.logger.warn('WAHA_BASE_URL/WAHA_API_KEY/WAHA_GROUP_CHAT_ID não configurados: pulando polling de "ajustado".', 'Auditoria');
+            return;
+        }
+        const janelaMin = Number(process.env.WAHA_AJUSTADO_JANELA_MIN) > 0 ? Number(process.env.WAHA_AJUSTADO_JANELA_MIN) : 15;
+        const limiteAntigoSec = Math.floor(Date.now() / 1000) - janelaMin * 60;
+        const url = `${base.replace(/\/$/, '')}/api/${session}/chats/${encodeURIComponent(group)}/messages?limit=30&downloadMedia=false`;
+        const resp = await fetch(url, { headers: { 'X-Api-Key': key } });
+        if (!resp.ok) {
+            this.logger.error(`WAHA recusou leitura de mensagens: HTTP ${resp.status}`, undefined, 'Auditoria');
+            return;
+        }
+        const msgs = await resp.json();
+        if (!Array.isArray(msgs))
+            return;
+        for (const m of msgs) {
+            try {
+                if (m === null || m === void 0 ? void 0 : m.fromMe)
+                    continue;
+                const body = String((_a = m === null || m === void 0 ? void 0 : m.body) !== null && _a !== void 0 ? _a : '');
+                if (!/ajustad[oa]/i.test(body))
+                    continue;
+                const msgId = String((_b = m === null || m === void 0 ? void 0 : m.id) !== null && _b !== void 0 ? _b : '');
+                if (!msgId)
+                    continue;
+                const ja = await this.prisma.$queryRawUnsafe(`SELECT 1 FROM com_nfe_ajustado_processado WHERE waha_msg_id = $1`, msgId);
+                if (ja.length > 0)
+                    continue;
+                const ts = Number((_c = m === null || m === void 0 ? void 0 : m.timestamp) !== null && _c !== void 0 ? _c : 0);
+                if (ts && ts < limiteAntigoSec) {
+                    await this.marcarAjustadoProcessado(msgId, null, 'ANTIGO');
+                    continue;
+                }
+                const citada = String((_h = (_e = (_d = m === null || m === void 0 ? void 0 : m.replyTo) === null || _d === void 0 ? void 0 : _d.body) !== null && _e !== void 0 ? _e : (_g = (_f = m === null || m === void 0 ? void 0 : m._data) === null || _f === void 0 ? void 0 : _f.quotedMsg) === null || _g === void 0 ? void 0 : _g.body) !== null && _h !== void 0 ? _h : '');
+                const match = `${citada}\n${body}`.match(/(\d{44})/);
+                if (!match) {
+                    await this.wahaEnviarTexto('❓ Não consegui identificar a NF. *Responda à mensagem do alerta* (citando) com *ajustado*.', msgId);
+                    await this.marcarAjustadoProcessado(msgId, null, 'SEM_CHAVE');
+                    continue;
+                }
+                const chave = match[1];
+                const detalhe = await this.reconferirAuditoria(chave);
+                if (!detalhe) {
+                    await this.wahaEnviarTexto(`⚠️ NF não encontrada na base de conciliação.\nChave: ${chave}`, msgId);
+                    await this.marcarAjustadoProcessado(msgId, chave, 'NAO_ENCONTRADA');
+                    continue;
+                }
+                const h = detalhe.header;
+                const numero = (_j = h === null || h === void 0 ? void 0 : h.numero) !== null && _j !== void 0 ? _j : '-';
+                let texto;
+                let resultado;
+                if (h === null || h === void 0 ? void 0 : h.naoAuditavel) {
+                    texto = `ℹ️ *NF ${numero}* não está mais lançada no ERP (${(_k = h === null || h === void 0 ? void 0 : h.statusErp) !== null && _k !== void 0 ? _k : '—'}) — fora da auditoria.\n\`${chave}\``;
+                    resultado = 'NAO_AUDITAVEL';
+                }
+                else if (((_l = h === null || h === void 0 ? void 0 : h.totalErros) !== null && _l !== void 0 ? _l : 0) === 0) {
+                    texto =
+                        `🧾 *Auditoria fiscal* — ✅ *OK*\n\n` +
+                            `NF: *${numero}* - ${(_m = h === null || h === void 0 ? void 0 : h.emitente) !== null && _m !== void 0 ? _m : '-'} (${(_o = h === null || h === void 0 ? void 0 : h.uf) !== null && _o !== void 0 ? _o : '-'})\n\n` +
+                            `100% ajustada! Sem divergências. 👏\n\`${chave}\``;
+                    resultado = 'OK';
+                }
+                else {
+                    texto =
+                        `🧾 *Auditoria fiscal* — 🚫 *ERRO* 🚫\n\n` +
+                            `NF: *${numero}* - ${(_p = h === null || h === void 0 ? void 0 : h.emitente) !== null && _p !== void 0 ? _p : '-'} (${(_q = h === null || h === void 0 ? void 0 : h.uf) !== null && _q !== void 0 ? _q : '-'})\n\n` +
+                            `Erros (${h.totalErros}):\n\n${this.blocosErrosDoDetalhe(detalhe) || '—'}\n\n` +
+                            `↩️ Após ajustar no ERP, responda *ajustado* novamente.\n\`${chave}\``;
+                    resultado = 'DIVERGENTE';
+                }
+                await this.wahaEnviarTexto(texto, msgId);
+                await this.marcarAjustadoProcessado(msgId, chave, resultado);
+                this.logger.log(`Resposta "ajustado" tratada (NF ${numero}, ${resultado}).`, 'Auditoria');
+            }
+            catch (e) {
+                this.logger.error(`Falha ao tratar resposta "ajustado" (msg ${m === null || m === void 0 ? void 0 : m.id}): ${e instanceof Error ? e.message : String(e)}`, undefined, 'Auditoria');
+            }
+        }
+    }
+    async marcarAjustadoProcessado(msgId, chave, resultado) {
+        await this.prisma.$executeRawUnsafe(`INSERT INTO com_nfe_ajustado_processado (waha_msg_id, chave_nfe, resultado)
+             VALUES ($1, $2, $3) ON CONFLICT (waha_msg_id) DO NOTHING`, msgId, chave, resultado);
+    }
     cufToSigla(cuf) {
         var _a;
         return (_a = IcmsService_1.CUF_SIGLA[String(cuf !== null && cuf !== void 0 ? cuf : '')]) !== null && _a !== void 0 ? _a : String(cuf !== null && cuf !== void 0 ? cuf : '');

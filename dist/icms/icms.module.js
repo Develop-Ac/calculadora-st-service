@@ -11,13 +11,14 @@ const common_1 = require("@nestjs/common");
 const icms_controller_1 = require("./icms.controller");
 const icms_service_1 = require("./icms.service");
 const icms_sync_cron_1 = require("./icms-sync.cron");
+const auditoria_ajustado_cron_1 = require("./auditoria-ajustado.cron");
 let IcmsModule = class IcmsModule {
 };
 exports.IcmsModule = IcmsModule;
 exports.IcmsModule = IcmsModule = __decorate([
     (0, common_1.Module)({
         controllers: [icms_controller_1.IcmsController],
-        providers: [icms_service_1.IcmsService, icms_sync_cron_1.IcmsSyncCron],
+        providers: [icms_service_1.IcmsService, icms_sync_cron_1.IcmsSyncCron, auditoria_ajustado_cron_1.AuditoriaAjustadoCron],
     })
 ], IcmsModule);
 //# sourceMappingURL=icms.module.js.map
