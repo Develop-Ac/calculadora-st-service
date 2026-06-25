@@ -1274,12 +1274,11 @@ let IcmsService = IcmsService_1 = class IcmsService {
         if (produtoInterno) {
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
             const temCest = !!String((_a = produtoInterno.CEST) !== null && _a !== void 0 ? _a : '').trim();
-            const stEsperado = temCest ? 'ST0-X' : 'TR0-X';
-            if (stCodigo !== stEsperado) {
-                divergencias.push(`Situação Tributária inválida: produto ${temCest ? 'com' : 'sem'} CEST exige ST_CODIGO=${stEsperado} e encontrado ${stCodigo || 'vazio'}.`);
+            if (temCest && stCodigo !== 'ST0-X') {
+                divergencias.push(`Situação Tributária inválida: produto com CEST exige ST_CODIGO=ST0-X e encontrado ${stCodigo || 'vazio'}.`);
             }
-            else {
-                conformidades.push(`Situação Tributária correta: ${stEsperado} (${temCest ? 'com' : 'sem'} CEST).`);
+            else if (temCest) {
+                conformidades.push('Situação Tributária correta: ST0-X (com CEST).');
             }
         }
         const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
@@ -2108,7 +2107,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
         return status;
     }
     async computarAuditoria(chaveNfe, opts = {}) {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
         const nfeRow = await this.prisma.nfeConciliacao.findUnique({
             where: { chave_nfe: chaveNfe },
             select: { xml_completo: true },
@@ -2187,10 +2186,12 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 const monofasico = this.isMonofasicoNcm(this.cleanDigits((_d = notaItem === null || notaItem === void 0 ? void 0 : notaItem.ncm) !== null && _d !== void 0 ? _d : ''));
                 const reg = this.regraEsperada(rules, imposto, destinacao, monofasico);
                 const cfopNota = this.digitsOnly(ei.CFOP_NOTA);
-                const temCest = !!String((_e = prod === null || prod === void 0 ? void 0 : prod.CEST) !== null && _e !== void 0 ? _e : '').trim();
-                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, temCest);
-                const cfopExp = (_f = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cfopEntrada) !== null && _f !== void 0 ? _f : (reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null);
-                const cstFinalExp = (_g = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cstFinal) !== null && _g !== void 0 ? _g : reg.cstFinal;
+                const ehSt = cItem
+                    ? String((_e = cItem.imposto_escolhido) !== null && _e !== void 0 ? _e : '').toUpperCase() === 'ST'
+                    : (String((_f = prod === null || prod === void 0 ? void 0 : prod.ST_CODIGO) !== null && _f !== void 0 ? _f : '').toUpperCase() === 'ST0-X' || !!String((_g = prod === null || prod === void 0 ? void 0 : prod.CEST) !== null && _g !== void 0 ? _g : '').trim());
+                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, ehSt);
+                const cfopExp = (_h = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cfopEntrada) !== null && _h !== void 0 ? _h : (reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null);
+                const cstFinalExp = (_j = expCfop === null || expCfop === void 0 ? void 0 : expCfop.cstFinal) !== null && _j !== void 0 ? _j : reg.cstFinal;
                 if (cfopExp) {
                     checks.push({ campo: 'CFOP', esperado: cfopExp, encontrado: cfopLanc || '', ok: !cfopLanc || cfopLanc === cfopExp });
                 }
@@ -2202,7 +2203,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     checks.push({ campo: 'CST final', esperado: cstFinalExp, encontrado: enc, ok: !enc || enc === cstFinalExp });
                 }
                 if ((notaItem === null || notaItem === void 0 ? void 0 : notaItem.origemNota) && cstFiscalLanc.length === 3) {
-                    const origemExp = (_h = rules.origem.get(notaItem.origemNota)) !== null && _h !== void 0 ? _h : this.origemEsperada(notaItem.origemNota);
+                    const origemExp = (_k = rules.origem.get(notaItem.origemNota)) !== null && _k !== void 0 ? _k : this.origemEsperada(notaItem.origemNota);
                     const enc = cstFiscalLanc.slice(0, 1);
                     checks.push({ campo: 'CST origem', esperado: origemExp, encontrado: enc, ok: enc === origemExp });
                 }
@@ -2211,7 +2212,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 }
                 else if (prod) {
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
-                    const stEsperado = String((_j = prod.CEST) !== null && _j !== void 0 ? _j : '').trim() ? 'ST0-X' : 'TR0-X';
+                    const stEsperado = String((_l = prod.CEST) !== null && _l !== void 0 ? _l : '').trim() ? 'ST0-X' : null;
                     const cad = [
                         ['Cadastro ST_CODIGO', stEsperado, prod.ST_CODIGO],
                         ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],

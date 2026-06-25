@@ -1533,14 +1533,14 @@ export class IcmsService {
         }
 
         if (produtoInterno) {
-            // Situação Tributária: produto com CEST -> ST0-X (substituto); sem CEST -> TR0-X.
+            // Situação Tributária: COM CEST -> ST0-X. SEM CEST não força TR0-X
+            // (pode ser ST pela regra do 999 / uso automotivo).
             const stCodigo = String(produtoInterno.ST_CODIGO || '').trim().toUpperCase();
             const temCest = !!String(produtoInterno.CEST ?? '').trim();
-            const stEsperado = temCest ? 'ST0-X' : 'TR0-X';
-            if (stCodigo !== stEsperado) {
-                divergencias.push(`Situação Tributária inválida: produto ${temCest ? 'com' : 'sem'} CEST exige ST_CODIGO=${stEsperado} e encontrado ${stCodigo || 'vazio'}.`);
-            } else {
-                conformidades.push(`Situação Tributária correta: ${stEsperado} (${temCest ? 'com' : 'sem'} CEST).`);
+            if (temCest && stCodigo !== 'ST0-X') {
+                divergencias.push(`Situação Tributária inválida: produto com CEST exige ST_CODIGO=ST0-X e encontrado ${stCodigo || 'vazio'}.`);
+            } else if (temCest) {
+                conformidades.push('Situação Tributária correta: ST0-X (com CEST).');
             }
         }
 
@@ -2699,8 +2699,13 @@ export class IcmsService {
                 // CFOP/CST esperados: 1º pelas regras por CFOP do fornecedor (norma MT,
                 // considerando se o produto tem CEST); fallback na matriz imposto×destinação.
                 const cfopNota = this.digitsOnly(ei.CFOP_NOTA);
-                const temCest = !!String(prod?.CEST ?? '').trim();
-                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, temCest);
+                // "É ST?": a conferência da tela manda (imposto escolhido); sem ela,
+                // usa o cadastro (ST_CODIGO=ST0-X) ou o CEST. O campo CEST pode estar
+                // vazio mesmo em produto ST (regra do 999 / uso automotivo).
+                const ehSt = cItem
+                    ? String(cItem.imposto_escolhido ?? '').toUpperCase() === 'ST'
+                    : (String(prod?.ST_CODIGO ?? '').toUpperCase() === 'ST0-X' || !!String(prod?.CEST ?? '').trim());
+                const expCfop = this.cfopRegraEsperada(rules, cfopNota, destinacao, ehSt);
                 const cfopExp = expCfop?.cfopEntrada ?? (reg.cfopSufixo ? (intra ? '1' : '2') + reg.cfopSufixo : null);
                 const cstFinalExp = expCfop?.cstFinal ?? reg.cstFinal;
 
@@ -2723,8 +2728,9 @@ export class IcmsService {
                 } else if (prod) {
                     // PIS/COFINS vêm do SUBTIPO do cadastro (07/08->P70/C70, mono->04, senão P01/C01).
                     const pc = this.pisCofinsEsperado(prod.SUBTIPO, monofasico);
-                    // Situação Tributária: produto com CEST -> ST0-X (substituto); sem CEST -> TR0-X.
-                    const stEsperado = String(prod.CEST ?? '').trim() ? 'ST0-X' : 'TR0-X';
+                    // Situação Tributária: COM CEST -> ST0-X (substituto). SEM CEST
+                    // NÃO força TR0-X — pode ser ST pela regra do 999 (uso automotivo).
+                    const stEsperado = String(prod.CEST ?? '').trim() ? 'ST0-X' : null;
                     const cad: Array<[string, any, any]> = [
                         ['Cadastro ST_CODIGO', stEsperado, prod.ST_CODIGO],
                         ['Cadastro PIS', pc.pis, prod.PIS_CODIGO],
