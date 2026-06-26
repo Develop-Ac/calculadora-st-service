@@ -177,7 +177,7 @@ export class CteRastreioService {
       base.cteChave = cte.chave_acesso;
       base.transportadora = cte.emitente_nome;
       base.transportadoraCnpj = cte.emitente_cnpj;
-      base.modalidadeFrete = cte.modalidade_pagador;
+      base.modalidadeFrete = labelModalidade(cte.modalidade_pagador);
       base.freteNossaConta = !!cte.tomador_nos;
       base.valorFrete = cte.valor_total != null ? Number(cte.valor_total) : null;
       base.rastreio = await this.getRastreio(cte.chave_acesso);
@@ -444,6 +444,21 @@ export class CteRastreioService {
     const txt = `${ev.ocorrencia || ''} ${ev.descricao || ''}`.toUpperCase();
     return /MERCADORIA ENTREGUE|ENTREGA REALIZADA|COMPROVANTE DE ENTREGA/.test(txt);
   }
+}
+
+/**
+ * Normaliza o papel do tomador/modalidade do frete para um rótulo limpo.
+ * Tolera mojibake do XML (ex.: "DESTINAT�RIO") casando pelo prefixo.
+ */
+function labelModalidade(raw?: string | null): string | null {
+  const s = String(raw || '').toUpperCase();
+  if (!s) return null;
+  if (s.startsWith('REMET')) return 'Remetente';
+  if (s.startsWith('DESTINAT')) return 'Destinatário';
+  if (s.startsWith('EXPED')) return 'Expedidor';
+  if (s.startsWith('RECEB')) return 'Recebedor';
+  if (s.startsWith('OUTRO')) return 'Outros';
+  return raw || null;
 }
 
 /** CNPJ-raiz (8 primeiros dígitos) ou null. */
