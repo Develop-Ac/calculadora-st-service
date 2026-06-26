@@ -3159,6 +3159,45 @@ export class IcmsService {
         };
     }
 
+    /**
+     * Reauditoria periódica das NF LANCADA ainda NÃO alertadas, numa janela curta.
+     *
+     * Porquê: o alerta automático de WhatsApp só dispara no instante em que a NF
+     * vira LANCADA (sync). Quando a divergência só aparece DEPOIS — caso típico de
+     * uso/consumo, em que o fiscal ajusta o cadastro do produto (SUBTIPO/ST/CEST)
+     * após a entrada, e o Stage_Produtos só reflete no próximo ETL — a nota vira
+     * DIVERGENTE numa reconferência posterior, que não envia. Esta passada cobre
+     * essa lacuna: reaudita com produtoDireto (cadastro ao vivo no ERP) e ENVIA.
+     *
+     * É idempotente: auditarLancamentoFiscal só dispara o alerta quando há erro E
+     * auditoria_alerta_em ainda é nula — então uma nota que continua OK não gera
+     * nada, e cada nota é alertada no máximo uma vez. Janela curta (dt_entrada nos
+     * últimos N dias) para limitar o nº de consultas OPENQUERY ao ERP por ciclo.
+     */
+    async reauditarPendentesAlerta(diasJanela = 7, limite = 300): Promise<{ avaliadas: number }> {
+        const dias = Number.isFinite(diasJanela) && diasJanela > 0 ? Math.floor(diasJanela) : 7;
+        const agora = new Date();
+        const cutoff = new Date(agora.getTime() - dias * 24 * 60 * 60 * 1000);
+        const pendentes = await this.prisma.nfeConciliacao.findMany({
+            where: {
+                status_erp: 'LANCADA',
+                auditoria_alerta_em: null,
+                // Janela curta por data de entrada; teto em "agora" descarta notas
+                // com dt_entrada futura (dado inconsistente do ERP) que ficariam
+                // sendo reauditadas para sempre.
+                dt_entrada: { gte: cutoff, lte: agora },
+            },
+            select: { chave_nfe: true },
+            orderBy: { dt_entrada: 'desc' },
+            take: Math.max(1, Math.floor(limite)),
+        });
+        for (const n of pendentes) {
+            // enviarAlerta default true; produtoDireto p/ ler o cadastro vigente do ERP.
+            await this.auditarLancamentoFiscal(n.chave_nfe, { produtoDireto: true });
+        }
+        return { avaliadas: pendentes.length };
+    }
+
     /** Lista NFs lançadas com o status da auditoria, para a aba Conferência Fiscal. */
     async listAuditorias(f: {
         q?: string; emitente?: string; escopo?: string; status?: string;
