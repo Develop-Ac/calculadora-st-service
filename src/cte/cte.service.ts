@@ -24,6 +24,23 @@ type CargaJob = {
 // Data-base da carga inicial / janela padrão da listagem.
 const INICIO_PADRAO = '2026-01-01';
 
+// Raiz do CNPJ da nossa empresa (C. M. SIQUEIRA E CIA LTDA — AC ACESSÓRIOS): matriz
+// 07.351.198/0001-05 e filial /0002-88 compartilham a mesma raiz (8 primeiros dígitos).
+const NOSSO_CNPJ_RAIZ = '07351198';
+
+/**
+ * Classifica o frete pela posição da nossa empresa no CT-e:
+ *  - destinatário = nós  → COMPRA (recebemos a mercadoria);
+ *  - remetente   = nós   → VENDA  (despachamos a mercadoria);
+ *  - caso contrário      → OUTRO.
+ */
+function classificarFrete(remetenteCnpj?: string | null, destinatarioCnpj?: string | null): 'COMPRA' | 'VENDA' | 'OUTRO' {
+  const raiz = (c?: string | null) => String(c || '').replace(/\D/g, '').slice(0, 8);
+  if (raiz(destinatarioCnpj) === NOSSO_CNPJ_RAIZ) return 'COMPRA';
+  if (raiz(remetenteCnpj) === NOSSO_CNPJ_RAIZ) return 'VENDA';
+  return 'OUTRO';
+}
+
 @Injectable()
 export class CteService {
   private readonly logger = new Logger(CteService.name);
@@ -40,6 +57,8 @@ export class CteService {
 
   async listCtes(params: {
     status?: string;
+    tipoFrete?: string;
+    somosTomador?: string;
     numero?: string;
     emitente?: string;
     cnpj?: string;
@@ -56,6 +75,16 @@ export class CteService {
     const status = String(params.status || '').toUpperCase();
     if (status === 'PENDENTE' || status === 'LANCADA') {
       where.status = status;
+    }
+
+    const tipoFrete = String(params.tipoFrete || '').toUpperCase();
+    if (tipoFrete === 'COMPRA' || tipoFrete === 'VENDA' || tipoFrete === 'OUTRO') {
+      where.tipo_frete = tipoFrete;
+    }
+
+    const somosTomador = String(params.somosTomador || '').trim();
+    if (somosTomador === '1' || somosTomador.toLowerCase() === 'true') {
+      where.tomador_nos = true;
     }
 
     const numero = String(params.numero || '').trim();
@@ -115,6 +144,9 @@ export class CteService {
       data_emissao: r.data_emissao ? r.data_emissao.toISOString() : '',
       dt_entrada: r.dt_entrada ? r.dt_entrada.toISOString() : null,
       status: (r.status as 'PENDENTE' | 'LANCADA') || 'PENDENTE',
+      tipoFrete: (r.tipo_frete as 'COMPRA' | 'VENDA' | 'OUTRO') || 'OUTRO',
+      tomadorNome: r.tomador_nome || '',
+      tomadorNos: !!r.tomador_nos,
     }));
 
     return { items, total, page, pageSize };
@@ -332,6 +364,11 @@ export class CteService {
     const destino = data.destinoMunicipio && data.destinoUf ? `${data.destinoMunicipio}/${data.destinoUf}` : null;
     const dataEmissao = data.dataEmissao ? new Date(data.dataEmissao) : null;
 
+    const tipoFrete = classificarFrete(data.remetente.cnpjCpf, data.destinatario.cnpjCpf);
+    const raiz = (c?: string | null) => String(c || '').replace(/\D/g, '').slice(0, 8);
+    const tomadorNos = !!data.tomadorParte && raiz(data.tomadorParte.cnpjCpf) === NOSSO_CNPJ_RAIZ;
+    const tomadorNome = data.tomadorParte?.nome || data.tomador || '';
+
     const base = {
       numero: data.numero || null,
       serie: data.serie || null,
@@ -346,6 +383,9 @@ export class CteService {
       data_emissao: dataEmissao && !Number.isNaN(dataEmissao.getTime()) ? dataEmissao : null,
       status,
       dt_entrada: dtEntrada,
+      tipo_frete: tipoFrete,
+      tomador_nome: tomadorNome || null,
+      tomador_nos: tomadorNos,
       xml_completo: xmlCompactado,
       dados_json: data as any,
     };

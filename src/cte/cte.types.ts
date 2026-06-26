@@ -58,6 +58,7 @@ export interface CteData {
   destinatario: CtePartelE; // dest
   expedidor: CtePartelE | null; // exped
   recebedor: CtePartelE | null; // receb
+  tomadorParte: CtePartelE | null; // parte que é o tomador (resolvida do toma3/toma4)
 
   // Valores da prestação
   valorTotalPrestacao: number; // vTPrest
@@ -140,4 +141,9 @@ export interface CteListItem {
   data_emissao: string; // ISO
   dt_entrada: string | null; // quando LANCADA
   status: 'PENDENTE' | 'LANCADA';
+  // Frete sobre COMPRA (destinatário = nossa empresa) ou VENDA (remetente = nossa empresa).
+  tipoFrete: 'COMPRA' | 'VENDA' | 'OUTRO';
+  // Responsável pelo pagamento do frete (tomador) e se é a nossa empresa.
+  tomadorNome: string; // nome da parte tomadora (ou o papel, ex.: "DESTINATÁRIO")
+  tomadorNos: boolean; // true quando a nossa empresa é o tomador (frete por nossa conta)
 }

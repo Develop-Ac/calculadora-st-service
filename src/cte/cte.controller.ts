@@ -12,6 +12,8 @@ export class CteController {
   @Get('documentos')
   async listar(
     @Query('status') status?: string,
+    @Query('tipoFrete') tipoFrete?: string,
+    @Query('somosTomador') somosTomador?: string,
     @Query('numero') numero?: string,
     @Query('emitente') emitente?: string,
     @Query('cnpj') cnpj?: string,
@@ -20,7 +22,7 @@ export class CteController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.service.listCtes({ status, numero, emitente, cnpj, dataInicio, dataFim, page, pageSize });
+    return this.service.listCtes({ status, tipoFrete, somosTomador, numero, emitente, cnpj, dataInicio, dataFim, page, pageSize });
   }
 
   /** Detalhe (cabeçalho do CT-e parseado). */

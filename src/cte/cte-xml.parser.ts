@@ -184,6 +184,20 @@ export function parseCteXml(xml: string): CteData {
   const toma4 = ide.toma4 ? '4' : '';
   const tomadorCod = toma3 || toma4;
 
+  // Partes (resolvidas para uso no DACTE e na tela de Detalhe)
+  const remetente = parseParte(infCte.rem, 'enderReme');
+  const destinatario = parseParte(infCte.dest, 'enderDest');
+  const expedidor = infCte.exped ? parseParte(infCte.exped, 'enderExped') : null;
+  const recebedor = infCte.receb ? parseParte(infCte.receb, 'enderReceb') : null;
+
+  // Tomador como PARTE: 0=Remetente,1=Expedidor,2=Recebedor,3=Destinatário,4=Outros(toma4).
+  let tomadorParte: CtePartelE | null = null;
+  if (tomadorCod === '0') tomadorParte = remetente;
+  else if (tomadorCod === '1') tomadorParte = expedidor;
+  else if (tomadorCod === '2') tomadorParte = recebedor;
+  else if (tomadorCod === '3') tomadorParte = destinatario;
+  else if (tomadorCod === '4') tomadorParte = parseParte(ide.toma4, 'enderToma');
+
   // RNTRC (modal rodoviário)
   const rntrc = txt(norm.infModal?.rodo?.RNTRC);
 
@@ -241,10 +255,11 @@ export function parseCteXml(xml: string): CteData {
 
     emitente,
     rntrc,
-    remetente: parseParte(infCte.rem, 'enderReme'),
-    destinatario: parseParte(infCte.dest, 'enderDest'),
-    expedidor: infCte.exped ? parseParte(infCte.exped, 'enderExped') : null,
-    recebedor: infCte.receb ? parseParte(infCte.receb, 'enderReceb') : null,
+    remetente,
+    destinatario,
+    expedidor,
+    recebedor,
+    tomadorParte,
 
     valorTotalPrestacao: num(vPrest.vTPrest),
     valorReceber: num(vPrest.vRec),
@@ -338,7 +353,7 @@ function vazio(): CteData {
     protocolo: '', dataAutorizacao: '',
     origemMunicipio: '', origemUf: '', destinoMunicipio: '', destinoUf: '',
     emitente: { ...parteVazia }, rntrc: '', remetente: { ...parteVazia }, destinatario: { ...parteVazia },
-    expedidor: null, recebedor: null,
+    expedidor: null, recebedor: null, tomadorParte: null,
     valorTotalPrestacao: 0, valorReceber: 0, componentes: [],
     valorCarga: 0, produtoPredominante: '',
     cst: '', icmsBase: 0, icmsAliquota: 0, icmsValor: 0,
