@@ -75,6 +75,10 @@ export class CteService {
     const status = String(params.status || '').toUpperCase();
     if (status === 'PENDENTE' || status === 'LANCADA') {
       where.status = status;
+    } else if (status === 'EM_TRANSITO' || status === 'ENTREGUE') {
+      // Situação de transporte (rastreio SSW). "Lançada" sobrepõe, então excluímos LANCADA.
+      where.rastreio_status = status;
+      where.status = { not: 'LANCADA' };
     }
 
     const tipoFrete = String(params.tipoFrete || '').toUpperCase();
