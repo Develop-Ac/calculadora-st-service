@@ -81,6 +81,15 @@ let IcmsController = class IcmsController {
     async reconferirPeriodo(q, emitente, escopo, status, dtInicio, dtFim) {
         return this.service.reconferirPeriodo({ q, emitente, escopo, status, dtInicio, dtFim });
     }
+    async exportarXmlAuditoria(q, emitente, escopo, status, dtInicio, dtFim, res) {
+        const { buffer, count } = await this.service.exportarXmlAuditoria({ q, emitente, escopo, status, dtInicio, dtFim });
+        res.set({
+            'Content-Type': 'application/zip',
+            'Content-Disposition': 'attachment; filename="nfe-lancadas-xmls.zip"',
+            'X-Total-Notas': String(count),
+        });
+        return new common_1.StreamableFile(buffer);
+    }
     async getAuditoria(chaveNfe) {
         const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);
         if (!detalhe) {
@@ -280,6 +289,19 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String, String, String, String]),
     __metadata("design:returntype", Promise)
 ], IcmsController.prototype, "reconferirPeriodo", null);
+__decorate([
+    (0, common_1.Get)('auditoria/exportar-xml'),
+    __param(0, (0, common_1.Query)('q')),
+    __param(1, (0, common_1.Query)('emitente')),
+    __param(2, (0, common_1.Query)('escopo')),
+    __param(3, (0, common_1.Query)('status')),
+    __param(4, (0, common_1.Query)('dtInicio')),
+    __param(5, (0, common_1.Query)('dtFim')),
+    __param(6, (0, common_1.Res)({ passthrough: true })),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], IcmsController.prototype, "exportarXmlAuditoria", null);
 __decorate([
     (0, common_1.Get)('auditoria/:chaveNfe'),
     __param(0, (0, common_1.Param)('chaveNfe')),

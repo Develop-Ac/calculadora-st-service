@@ -2608,6 +2608,48 @@ let IcmsService = IcmsService_1 = class IcmsService {
             }),
         };
     }
+    async exportarXmlAuditoria(f) {
+        var _a;
+        if (!f.dtInicio || !f.dtFim) {
+            throw new common_1.BadRequestException('Selecione um período (data inicial e final) antes de exportar os XMLs.');
+        }
+        const { where, params } = this.buildAuditoriaFiltro(f);
+        const rows = await this.prisma.$queryRawUnsafe(`SELECT c.chave_nfe, c.xml_completo, substring(c.chave_nfe from 26 for 9) AS numero
+             FROM com_nfe_conciliacao c WHERE ${where}
+             ORDER BY c.dt_entrada DESC NULLS LAST LIMIT 10000`, ...params);
+        const items = [];
+        for (const r of rows) {
+            const xml = await this.normalizeBlobXml(r.xml_completo);
+            if (xml)
+                items.push({ nome: String(Number((_a = r.numero) !== null && _a !== void 0 ? _a : '0')), chave: r.chave_nfe, xml });
+        }
+        const buffer = await this.zipXmls(items);
+        return { buffer, count: items.length };
+    }
+    zipXmls(items) {
+        return new Promise((resolve, reject) => {
+            const archive = (0, archiver_1.default)('zip', { zlib: { level: 9 } });
+            const chunks = [];
+            const stream = new stream_1.Writable({
+                write(chunk, _enc, cb) { chunks.push(Buffer.from(chunk)); cb(); },
+            });
+            archive.pipe(stream);
+            stream.on('finish', () => resolve(Buffer.concat(chunks)));
+            archive.on('error', reject);
+            const usados = new Set();
+            for (const it of items) {
+                if (!it.xml)
+                    continue;
+                const base = String(it.nome || it.chave).replace(/[^\w.-]/g, '_');
+                let nome = `${base}.xml`;
+                if (usados.has(nome))
+                    nome = `${base}_${it.chave}.xml`;
+                usados.add(nome);
+                archive.append(it.xml, { name: nome });
+            }
+            archive.finalize();
+        });
+    }
     async getAuditoriaDetalhe(chaveNfe, direto = false) {
         var _a, _b, _c, _d, _e, _f, _g, _h, _j;
         const rows = await this.prisma.$queryRawUnsafe(`SELECT chave_nfe, emitente, cnpj_emitente, data_emissao, dt_entrada, valor_total,

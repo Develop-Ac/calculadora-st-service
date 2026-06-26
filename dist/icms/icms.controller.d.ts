@@ -111,6 +111,7 @@ export declare class IcmsController {
         ok: number;
         divergente: number;
     }>;
+    exportarXmlAuditoria(q: string | undefined, emitente: string | undefined, escopo: string | undefined, status: string | undefined, dtInicio: string | undefined, dtFim: string | undefined, res: Response): Promise<StreamableFile>;
     getAuditoria(chaveNfe: string): Promise<{
         header: {
             status: any;

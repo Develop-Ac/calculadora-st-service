@@ -55,6 +55,33 @@ export class NfseController {
     return this.service.reprocessar();
   }
 
+  /** Exporta os XMLs do período filtrado em .zip (exige data inicial e final). */
+  @Get('documentos/exportar-xml')
+  async exportarXml(
+    @Query('numero') numero: string | undefined,
+    @Query('cnpj') cnpj: string | undefined,
+    @Query('dataInicio') dataInicio: string | undefined,
+    @Query('dataFim') dataFim: string | undefined,
+    @Query('papel') papel: string | undefined,
+    @Query('comRetFederal') comRetFederal: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const { buffer, count } = await this.service.exportarXml({
+      numero,
+      cnpj,
+      dataInicio,
+      dataFim,
+      papel,
+      comRetFederal,
+    });
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': 'attachment; filename="nfse-xmls.zip"',
+      'X-Total-Notas': String(count),
+    });
+    return new StreamableFile(buffer);
+  }
+
   /** Detalhe completo de uma NFS-e (todos os dados + eventos + XML). */
   @Get('documentos/:chave')
   detalhe(@Param('chave') chave: string) {

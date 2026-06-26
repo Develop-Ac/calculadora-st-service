@@ -119,6 +119,25 @@ export class IcmsController {
         return this.service.reconferirPeriodo({ q, emitente, escopo, status, dtInicio, dtFim });
     }
 
+    @Get('auditoria/exportar-xml')
+    async exportarXmlAuditoria(
+        @Query('q') q: string | undefined,
+        @Query('emitente') emitente: string | undefined,
+        @Query('escopo') escopo: string | undefined,
+        @Query('status') status: string | undefined,
+        @Query('dtInicio') dtInicio: string | undefined,
+        @Query('dtFim') dtFim: string | undefined,
+        @Res({ passthrough: true }) res: Response,
+    ) {
+        const { buffer, count } = await this.service.exportarXmlAuditoria({ q, emitente, escopo, status, dtInicio, dtFim });
+        res.set({
+            'Content-Type': 'application/zip',
+            'Content-Disposition': 'attachment; filename="nfe-lancadas-xmls.zip"',
+            'X-Total-Notas': String(count),
+        });
+        return new StreamableFile(buffer);
+    }
+
     @Get('auditoria/:chaveNfe')
     async getAuditoria(@Param('chaveNfe') chaveNfe: string) {
         const detalhe = await this.service.getAuditoriaDetalhe(chaveNfe);

@@ -235,6 +235,18 @@ export declare class IcmsService {
             temRessalva: boolean;
         }[];
     }>;
+    exportarXmlAuditoria(f: {
+        q?: string;
+        emitente?: string;
+        escopo?: string;
+        status?: string;
+        dtInicio?: string;
+        dtFim?: string;
+    }): Promise<{
+        buffer: Buffer;
+        count: number;
+    }>;
+    private zipXmls;
     getAuditoriaDetalhe(chaveNfe: string, direto?: boolean): Promise<{
         header: {
             status: any;

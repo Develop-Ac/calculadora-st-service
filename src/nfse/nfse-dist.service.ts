@@ -1,5 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { createHash } from 'crypto';
+import { Writable } from 'stream';
+import archiver from 'archiver';
 import { parseStringPromise } from 'xml2js';
 import { PrismaService } from '../prisma/prisma.service';
 import { NfseAdnClient, AdnDfeItem } from './nfse-adn.client';
@@ -301,6 +303,33 @@ export class NfseDistService {
     page?: string;
     pageSize?: string;
   }) {
+    const where = this.montarWhere(filtros);
+
+    const page = Math.max(1, Number(filtros.page) || 1);
+    const pageSize = Math.min(Math.max(Number(filtros.pageSize) || 50, 1), 500);
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.nfseDocumento.count({ where }),
+      this.prisma.nfseDocumento.findMany({
+        where,
+        orderBy: { data_emissao: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    return { total, page, pageSize, items: rows.map((r) => this.serializar(r)) };
+  }
+
+  /** WHERE compartilhado entre a listagem e a exportação. */
+  private montarWhere(filtros: {
+    numero?: string;
+    cnpj?: string;
+    dataInicio?: string;
+    dataFim?: string;
+    papel?: string;
+    comRetFederal?: string;
+  }): any {
     const where: any = {};
     if (filtros.comRetFederal === '1' || filtros.comRetFederal === 'true') {
       where.retencao_federal = { gt: 0 };
@@ -326,21 +355,62 @@ export class NfseDistService {
       if (filtros.dataInicio) where.data_emissao.gte = new Date(`${filtros.dataInicio}T00:00:00`);
       if (filtros.dataFim) where.data_emissao.lte = new Date(`${filtros.dataFim}T23:59:59`);
     }
+    return where;
+  }
 
-    const page = Math.max(1, Number(filtros.page) || 1);
-    const pageSize = Math.min(Math.max(Number(filtros.pageSize) || 50, 1), 500);
+  /** Exporta os XMLs das NFS-e do período filtrado em um .zip. Exige período. */
+  async exportarXml(filtros: {
+    numero?: string;
+    cnpj?: string;
+    dataInicio?: string;
+    dataFim?: string;
+    papel?: string;
+    comRetFederal?: string;
+  }): Promise<{ buffer: Buffer; count: number }> {
+    if (!filtros.dataInicio || !filtros.dataFim) {
+      throw new BadRequestException(
+        'Selecione um período (data inicial e final) antes de exportar os XMLs.',
+      );
+    }
+    const where = this.montarWhere(filtros);
+    const rows = await this.prisma.nfseDocumento.findMany({
+      where,
+      select: { chave_acesso: true, numero: true, xml: true },
+      orderBy: { data_emissao: 'desc' },
+      take: 10000,
+    });
+    const buffer = await this.zipXmls(
+      rows.map((r) => ({ nome: r.numero || r.chave_acesso, chave: r.chave_acesso, xml: r.xml || '' })),
+    );
+    return { buffer, count: rows.length };
+  }
 
-    const [total, rows] = await this.prisma.$transaction([
-      this.prisma.nfseDocumento.count({ where }),
-      this.prisma.nfseDocumento.findMany({
-        where,
-        orderBy: { data_emissao: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+  /** Compacta uma lista de XMLs em um único .zip (nomes únicos por nota). */
+  private zipXmls(items: { nome: string; chave: string; xml: string }[]): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      const chunks: Buffer[] = [];
+      const stream = new Writable({
+        write(chunk, _enc, cb) {
+          chunks.push(Buffer.from(chunk));
+          cb();
+        },
+      });
+      archive.pipe(stream);
+      stream.on('finish', () => resolve(Buffer.concat(chunks)));
+      archive.on('error', reject);
 
-    return { total, page, pageSize, items: rows.map((r) => this.serializar(r)) };
+      const usados = new Set<string>();
+      for (const it of items) {
+        if (!it.xml) continue;
+        const base = String(it.nome || it.chave).replace(/[^\w.-]/g, '_');
+        let nome = `${base}.xml`;
+        if (usados.has(nome)) nome = `${base}_${it.chave}.xml`;
+        usados.add(nome);
+        archive.append(it.xml, { name: nome });
+      }
+      archive.finalize();
+    });
   }
 
   async detalhe(chave: string) {
