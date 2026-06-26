@@ -146,6 +146,8 @@ export class CteService {
       status: (r.status as 'PENDENTE' | 'LANCADA') || 'PENDENTE',
       tipoFrete: (r.tipo_frete as 'COMPRA' | 'VENDA' | 'OUTRO') || 'OUTRO',
       tomadorNome: r.tomador_nome || '',
+      tomadorCnpj: r.tomador_cnpj || '',
+      modalidadePagador: r.modalidade_pagador || '',
       tomadorNos: !!r.tomador_nos,
     }));
 
@@ -367,7 +369,12 @@ export class CteService {
     const tipoFrete = classificarFrete(data.remetente.cnpjCpf, data.destinatario.cnpjCpf);
     const raiz = (c?: string | null) => String(c || '').replace(/\D/g, '').slice(0, 8);
     const tomadorNos = !!data.tomadorParte && raiz(data.tomadorParte.cnpjCpf) === NOSSO_CNPJ_RAIZ;
-    const tomadorNome = data.tomadorParte?.nome || data.tomador || '';
+    // Dados do tomador (responsável pelo pagamento do frete) + modalidade = papel
+    // (REMETENTE/DESTINATÁRIO/EXPEDIDOR/RECEBEDOR/OUTROS). A tela mostra a modalidade
+    // quando não somos nós, e "Por nossa conta" quando somos.
+    const tomadorNome = data.tomadorParte?.nome || '';
+    const tomadorCnpj = data.tomadorParte?.cnpjCpf || '';
+    const modalidadePagador = data.tomador || '';
 
     const base = {
       numero: data.numero || null,
@@ -385,6 +392,8 @@ export class CteService {
       dt_entrada: dtEntrada,
       tipo_frete: tipoFrete,
       tomador_nome: tomadorNome || null,
+      tomador_cnpj: tomadorCnpj || null,
+      modalidade_pagador: modalidadePagador || null,
       tomador_nos: tomadorNos,
       xml_completo: xmlCompactado,
       dados_json: data as any,

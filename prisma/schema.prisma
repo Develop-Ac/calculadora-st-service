@@ -83,8 +83,10 @@ model CteDocumento {
   tipo_frete String @default("OUTRO")
 
   // Responsável pelo pagamento do frete (tomador) e se é a nossa empresa
-  tomador_nome String?
-  tomador_nos  Boolean @default(false)
+  tomador_nome       String?
+  tomador_cnpj       String?
+  modalidade_pagador String? // REMETENTE | DESTINATÁRIO | EXPEDIDOR | RECEBEDOR | OUTROS
+  tomador_nos        Boolean @default(false)
 
   xml_completo String  @db.Text // gzip+base64 (mesmo encode da NF-e) ou XML puro
   dados_json   Json? // CteData já parseado p/ a tela e o DACTE
