@@ -55,6 +55,43 @@ model NfeConciliacao {
   @@map("com_nfe_conciliacao")
 }
 
+// CT-e de entrada (modelo 57) espelhado do ERP, igual à NF-e (com_nfe_conciliacao).
+// Fonte: CTE_DISTRIBUICAO (pendentes) + NF_ENTRADA modelo 57 (lançadas) + CTE_ENTRADA_XML (XML).
+model CteDocumento {
+  chave_acesso String @id // 44 dígitos do CT-e
+
+  numero  String?
+  serie   String?
+  cfop    String?
+
+  emitente_nome     String? // transportadora
+  emitente_cnpj     String?
+  remetente_nome    String?
+  destinatario_nome String?
+
+  origem  String? // "MUN/UF" de início da prestação
+  destino String? // "MUN/UF" de fim da prestação
+
+  valor_total  Float?    @default(0)
+  data_emissao DateTime?
+
+  // Status do espelho: PENDENTE (CTE_DISTRIBUICAO) | LANCADA (NF_ENTRADA modelo 57)
+  status     String    @default("PENDENTE")
+  dt_entrada DateTime? // preenchida quando LANCADA
+
+  xml_completo String  @db.Text // gzip+base64 (mesmo encode da NF-e) ou XML puro
+  dados_json   Json? // CteData já parseado p/ a tela e o DACTE
+  hash         String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([data_emissao])
+  @@index([status])
+  @@index([numero])
+  @@map("com_cte_documento")
+}
+
 // Ponteiro de NSU da distribuição de NFS-e (ADN) por CNPJ consultado.
 model NfseDistControle {
   cnpj            String   @id
