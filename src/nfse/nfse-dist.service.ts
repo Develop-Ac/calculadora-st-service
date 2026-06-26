@@ -179,11 +179,16 @@ export class NfseDistService {
     return true;
   }
 
+  // Classifica por RAIZ do CNPJ (8 díg.): o destinatário pode ser uma filial
+  // diferente do prestador/tomador que aparece na nota (mesma raiz, CNPJ distinto).
   private definirPapel(cnpjDest: string, extra: ExtractedNfse): string | null {
-    const d = cnpjDest.replace(/\D/g, '');
-    if (extra.cnpjTomador && extra.cnpjTomador.replace(/\D/g, '') === d) return 'TOMADOR';
-    if (extra.cnpjPrestador && extra.cnpjPrestador.replace(/\D/g, '') === d) return 'PRESTADOR';
-    return extra.papel || null;
+    const root = (cnpjDest || '').replace(/\D/g, '').slice(0, 8);
+    if (!root) return null;
+    const tom = (extra.cnpjTomador || '').replace(/\D/g, '').slice(0, 8);
+    const pres = (extra.cnpjPrestador || '').replace(/\D/g, '').slice(0, 8);
+    if (tom === root) return 'TOMADOR';
+    if (pres === root) return 'PRESTADOR';
+    return null;
   }
 
   /**
@@ -334,18 +339,16 @@ export class NfseDistService {
     if (filtros.comRetFederal === '1' || filtros.comRetFederal === 'true') {
       where.retencao_federal = { gt: 0 };
     }
-    const root = (process.env.NFSE_ADN_CNPJ || '').replace(/\D/g, '').slice(0, 8);
     const prestados = (filtros.papel || '').toUpperCase() === 'PRESTADOS';
     const c = (filtros.cnpj || '').replace(/\D/g, '');
 
-    // Tomados (padrão): minha empresa é o TOMADOR; contraparte filtrada = prestador.
-    // Prestados: minha empresa é o PRESTADOR; contraparte filtrada = tomador.
-    // Casa por RAIZ do CNPJ (8 díg.) p/ cobrir filiais do grupo.
+    // Filtra pela coluna `papel` (gravada por linha a partir do cnpj_destinatario),
+    // independente de variável de ambiente. Tomados = somos o TOMADOR; a contraparte
+    // filtrável é o prestador. Prestados = somos o PRESTADOR; contraparte é o tomador.
+    where.papel = prestados ? 'PRESTADOR' : 'TOMADOR';
     if (prestados) {
-      if (root) where.cnpj_prestador = { startsWith: root };
       if (c) where.cnpj_tomador = { contains: c };
     } else {
-      if (root) where.cnpj_tomador = { startsWith: root };
       if (c) where.cnpj_prestador = { contains: c };
     }
 
@@ -588,7 +591,7 @@ export class NfseDistService {
   /** Backfill: recalcula campos derivados do XML já salvo (ex.: retencao_federal). */
   async reprocessar(): Promise<{ total: number; atualizados: number }> {
     const rows = await this.prisma.nfseDocumento.findMany({
-      select: { chave_acesso: true, xml: true },
+      select: { chave_acesso: true, cnpj_destinatario: true, xml: true },
     });
     let atualizados = 0;
     for (const r of rows) {
@@ -597,7 +600,10 @@ export class NfseDistService {
       if (!extra) continue;
       await this.prisma.nfseDocumento.update({
         where: { chave_acesso: r.chave_acesso },
-        data: { retencao_federal: extra.retencaoFederal ?? 0 },
+        data: {
+          retencao_federal: extra.retencaoFederal ?? 0,
+          papel: this.definirPapel(r.cnpj_destinatario, extra),
+        },
       });
       atualizados++;
     }
