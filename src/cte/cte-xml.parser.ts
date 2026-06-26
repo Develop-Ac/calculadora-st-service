@@ -65,6 +65,18 @@ const TOMADOR: Record<string, string> = {
   '4': 'OUTROS',
 };
 
+// CST do ICMS no CT-e → descrição da situação tributária (texto do DACTE).
+const CST_ICMS: Record<string, string> = {
+  '00': 'TRIBUTAÇÃO NORMAL',
+  '20': 'BC REDUZIDA',
+  '40': 'ICMS ISENTO',
+  '41': 'ICMS NÃO TRIBUTADO',
+  '45': 'ISENTO/NÃO TRIB./DIFERIDO',
+  '51': 'DIFERIDO',
+  '60': 'ICMS COBRADO POR ST',
+  '90': 'OUTROS',
+};
+
 function montarEndereco(ender: any): string {
   if (!ender) return '';
   const lgr = txt(ender.xLgr);
@@ -175,6 +187,36 @@ export function parseCteXml(xml: string): CteData {
   // RNTRC (modal rodoviário)
   const rntrc = txt(norm.infModal?.rodo?.RNTRC);
 
+  // Emitente (transportadora). "EMITIDO POR" no DACTE = a própria transportadora emitente.
+  const emitente = parseParte(emitBloco, 'enderEmit');
+
+  // ---- Quantidades da carga (infQ por tpMed) ----
+  const infQ = asArray(infCarga.infQ);
+  const qPorMedida = (...alvos: string[]): number => {
+    const item = infQ.find((q) => {
+      const m = txt(q?.tpMed).toUpperCase();
+      return alvos.some((a) => m.includes(a));
+    });
+    return item ? num(item.qCarga) : 0;
+  };
+
+  // ---- Reforma tributária (IBS/CBS) ----
+  const g = imp.IBSCBS?.gIBSCBS || {};
+
+  // ---- QR Code (infCTeSupl) ----
+  const qrCodeUrl = txt(cte.infCTeSupl?.qrCodCTe);
+
+  // ---- ObsCont (pedido, rota, tipo mercadoria) ----
+  const obsConts = asArray(infCte.compl?.ObsCont);
+  const obsTextos = obsConts.map((o) => txt(o?.xTexto)).join(' ');
+  const acharNoObs = (regex: RegExp): string => {
+    const m = obsTextos.match(regex);
+    return m ? m[1].trim() : '';
+  };
+  const pedido = acharNoObs(/N\s*PEDIDO:\s*([0-9.\-]+)/i);
+  const rota = acharNoObs(/ROTA:\s*([^\-.]+)/i);
+  const especie = acharNoObs(/TIPO\s*MERCAD:\s*([^.\-]+)/i);
+
   return {
     chave,
     numero: txt(ide.nCT),
@@ -186,7 +228,7 @@ export function parseCteXml(xml: string): CteData {
     tipoCte: TP_CTE[txt(ide.tpCTe)] || '',
     tipoServico: TP_SERV[txt(ide.tpServ)] || '',
     tomador: TOMADOR[tomadorCod] || '',
-    emitidoPor: '',
+    emitidoPor: emitente.nome,
     dataEmissao: txt(ide.dhEmi),
 
     protocolo: txt(proto.nProt),
@@ -197,7 +239,7 @@ export function parseCteXml(xml: string): CteData {
     destinoMunicipio: txt(ide.xMunFim),
     destinoUf: txt(ide.UFFim),
 
-    emitente: parseParte(emitBloco, 'enderEmit'),
+    emitente,
     rntrc,
     remetente: parseParte(infCte.rem, 'enderReme'),
     destinatario: parseParte(infCte.dest, 'enderDest'),
@@ -221,6 +263,40 @@ export function parseCteXml(xml: string): CteData {
     observacoes: txt(infCte.compl?.xObs),
 
     documentosNFe,
+
+    // ---- Campos do layout SSW ----
+    qrCodeUrl,
+    autorizacaoFl: '1/1',
+    suframa: txt(infCte.dest?.ISUF),
+
+    especie,
+    valorMercadoria: num(infCarga.vCarga),
+    qtdePares: qPorMedida('PARES'),
+    qtdeVolumes: qPorMedida('UNIDADE', 'VOLUME'),
+    cubagemM3: qPorMedida('M3', 'CUBAGEM'),
+    pesoKg: qPorMedida('PESO REAL', 'PESO BRUTO'),
+    pesoCalculoKg: qPorMedida('PESO BASE DE CALCULO', 'PESO BASE'),
+
+    ibsUfPerc: num(g.gIBSUF?.pIBSUF),
+    ibsUfValor: num(g.gIBSUF?.vIBSUF),
+    ibsMunPerc: num(g.gIBSMun?.pIBSMun),
+    ibsMunValor: num(g.gIBSMun?.vIBSMun),
+    cbsPerc: num(g.gCBS?.pCBS),
+    cbsValor: num(g.gCBS?.vCBS),
+
+    situacaoTributaria: CST_ICMS[icms.cst] || (icms.cst ? `CST ${icms.cst}` : ''),
+    difalIcms: 0,
+    credPresIcmsSt: 0,
+
+    tribIcmsIss: icms.vICMS,
+    tribPis: 0,
+    tribCofins: 0,
+    tribTotal: num(imp.vTotTrib),
+
+    prevEntrega: txt(infCte.compl?.Entrega?.comData?.dProg),
+    pedido,
+    rota,
+    placa: '',
   };
 }
 
@@ -267,5 +343,11 @@ function vazio(): CteData {
     valorCarga: 0, produtoPredominante: '',
     cst: '', icmsBase: 0, icmsAliquota: 0, icmsValor: 0,
     valorTotalTributos: 0, observacoes: '', documentosNFe: [],
+    qrCodeUrl: '', autorizacaoFl: '1/1', suframa: '',
+    especie: '', valorMercadoria: 0, qtdePares: 0, qtdeVolumes: 0, cubagemM3: 0, pesoKg: 0, pesoCalculoKg: 0,
+    ibsUfPerc: 0, ibsUfValor: 0, ibsMunPerc: 0, ibsMunValor: 0, cbsPerc: 0, cbsValor: 0,
+    situacaoTributaria: '', difalIcms: 0, credPresIcmsSt: 0,
+    tribIcmsIss: 0, tribPis: 0, tribCofins: 0, tribTotal: 0,
+    prevEntrega: '', pedido: '', rota: '', placa: '',
   };
 }

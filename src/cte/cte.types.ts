@@ -82,6 +82,46 @@ export interface CteData {
 
   // Documentos transportados (chaves de NF-e referenciadas)
   documentosNFe: string[]; // infDoc/infNFe/chave[]
+
+  // ---- Campos adicionais para o DACTE no layout SSW (modelo das transportadoras) ----
+
+  qrCodeUrl: string; // infCTeSupl/qrCodCTe (para o QR Code)
+  autorizacaoFl: string; // "1/1" (folha)
+  suframa: string; // dest/ISUF
+
+  // Mercadoria / carga
+  especie: string; // tipo de mercadoria (ex.: DIVERSOS) — derivado de obs "TIPO MERCAD"
+  valorMercadoria: number; // = vCarga
+  qtdePares: number; // infQ tpMed PARES
+  qtdeVolumes: number; // infQ tpMed UNIDADE/VOLUMES
+  cubagemM3: number; // infQ tpMed M3
+  pesoKg: number; // infQ tpMed PESO REAL
+  pesoCalculoKg: number; // infQ tpMed PESO BASE DE CALCULO
+
+  // Reforma tributária (IBS/CBS) — imp/IBSCBS/gIBSCBS
+  ibsUfPerc: number; // pIBSUF
+  ibsUfValor: number; // vIBSUF
+  ibsMunPerc: number; // pIBSMun
+  ibsMunValor: number; // vIBSMun
+  cbsPerc: number; // pCBS
+  cbsValor: number; // vCBS
+
+  // ICMS — campos extras do bloco
+  situacaoTributaria: string; // descrição do CST (TRIBUTADA / DIFERIDO / ...)
+  difalIcms: number; // DIFAL ICMS Orig/Dest (0 quando não houver)
+  credPresIcmsSt: number; // Crédito presumido / ICMS ST
+
+  // Destaque de tributos (Lei 12.741/2012) — aproximados
+  tribIcmsIss: number;
+  tribPis: number;
+  tribCofins: number;
+  tribTotal: number;
+
+  // Operacionais (do CT-e / obs)
+  prevEntrega: string; // ISO (compl/Entrega/comData/dProg)
+  pedido: string; // ObsCont "N PEDIDO"
+  rota: string; // ObsCont "ROTA"
+  placa: string; // placa de coleta (quando houver no XML; senão vazio)
 }
 
 /** Linha da listagem (resumo) servida pela API e exibida na tabela da aba CT-e. */
