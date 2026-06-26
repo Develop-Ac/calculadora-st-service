@@ -15,6 +15,25 @@ export interface RastreioEventoDto {
   entrega: boolean;
 }
 
+/** Situação de transporte derivada (NF/Pedido). */
+export type SituacaoTransporte = 'ENTREGUE' | 'EM_TRANSITO' | 'SEM_RASTREIO' | 'PENDENTE';
+
+/** Rastreio resolvido a partir da chave de uma NF transportada (tela da NF / Pedido). */
+export interface RastreioPorNfeDto {
+  chaveNfe: string;
+  vinculado: boolean; // existe CT-e transportando esta NF?
+  cteChave: string | null;
+  numeroNf: string | null;
+  transportadora: string | null;
+  transportadoraCnpj: string | null;
+  modalidadeFrete: string | null; // REMETENTE | DESTINATÁRIO | ...
+  freteNossaConta: boolean; // somos o tomador (frete por nossa conta)
+  valorFrete: number | null; // valor da prestação (a pagar quando freteNossaConta)
+  nfLancada: boolean; // NF já lançada no ERP (status_erp=LANCADA)
+  situacao: SituacaoTransporte; // Entregue (lançada) > Em Trânsito > Sem rastreio > Pendente
+  rastreio: RastreioDto | null;
+}
+
 /** Resposta do rastreio de um CT-e (cabeçalho + timeline). */
 export interface RastreioDto {
   chave: string;
@@ -105,6 +124,75 @@ export class CteRastreioService {
         entrega: this.ehEntrega(e),
       })),
     };
+  }
+
+  /**
+   * Resolve o rastreio a partir da chave de uma NF transportada (tela da NF e do Pedido).
+   * Acha o CT-e cujo documentosNFe contém a chave, deriva transportadora/frete e a
+   * situação de transporte (Entregue quando a NF está lançada; senão Em Trânsito quando
+   * há CT-e coberto com movimento; senão Sem rastreio / Pendente).
+   */
+  async getRastreioPorNfe(chaveNfe: string): Promise<RastreioPorNfeDto> {
+    const chave = String(chaveNfe || '').replace(/\D/g, '');
+    const base: RastreioPorNfeDto = {
+      chaveNfe: chave,
+      vinculado: false,
+      cteChave: null,
+      numeroNf: chave.length >= 34 ? chave.substring(25, 34).replace(/^0+/, '') || null : null,
+      transportadora: null,
+      transportadoraCnpj: null,
+      modalidadeFrete: null,
+      freteNossaConta: false,
+      valorFrete: null,
+      nfLancada: false,
+      situacao: 'PENDENTE',
+      rastreio: null,
+    };
+    if (chave.length !== 44) return base;
+
+    // NF lançada no ERP? (status_erp=LANCADA → mercadoria recebida → Entregue)
+    const nfe = await this.prisma.nfeConciliacao
+      .findUnique({ where: { chave_nfe: chave }, select: { status_erp: true } })
+      .catch(() => null);
+    base.nfLancada = nfe?.status_erp === 'LANCADA';
+
+    // CT-e que transporta esta NF (prefere o que tem rastreio / mais recente).
+    const cte = await this.prisma.cteDocumento.findFirst({
+      where: { dados_json: { path: ['documentosNFe'], array_contains: chave } },
+      orderBy: [{ rastreio_status: 'desc' }, { data_emissao: 'desc' }],
+      select: {
+        chave_acesso: true,
+        emitente_nome: true,
+        emitente_cnpj: true,
+        modalidade_pagador: true,
+        tomador_nos: true,
+        valor_total: true,
+        rastreio_status: true,
+        rastreio_cobertura: true,
+      },
+    });
+
+    if (cte) {
+      base.vinculado = true;
+      base.cteChave = cte.chave_acesso;
+      base.transportadora = cte.emitente_nome;
+      base.transportadoraCnpj = cte.emitente_cnpj;
+      base.modalidadeFrete = cte.modalidade_pagador;
+      base.freteNossaConta = !!cte.tomador_nos;
+      base.valorFrete = cte.valor_total != null ? Number(cte.valor_total) : null;
+      base.rastreio = await this.getRastreio(cte.chave_acesso);
+    }
+
+    // Situação (Lançada=Entregue sobrepõe; senão Em Trânsito enquanto há movimento coberto).
+    const emMovimento =
+      cte?.rastreio_cobertura === 'COBERTO' &&
+      (cte?.rastreio_status === 'EM_TRANSITO' || cte?.rastreio_status === 'ENTREGUE');
+    if (base.nfLancada) base.situacao = 'ENTREGUE';
+    else if (emMovimento) base.situacao = 'EM_TRANSITO';
+    else if (cte?.rastreio_cobertura === 'SEM_RASTREIO') base.situacao = 'SEM_RASTREIO';
+    else base.situacao = 'PENDENTE';
+
+    return base;
   }
 
   // =====================================================================

@@ -51,6 +51,12 @@ export class CteController {
     return data;
   }
 
+  /** Rastreio resolvido pela chave de uma NF transportada (tela da NF e do Pedido). */
+  @Get('rastreio/por-nfe/:chaveNfe')
+  async getRastreioPorNfe(@Param('chaveNfe') chaveNfe: string) {
+    return this.rastreio.getRastreioPorNfe(chaveNfe);
+  }
+
   /** Dispara o polling do rastreio no SSW manualmente (mesmo trabalho do cron). */
   @Post('rastreio/sincronizar')
   async sincronizarRastreio() {

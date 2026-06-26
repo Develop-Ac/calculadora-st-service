@@ -257,6 +257,11 @@ export class IcmsService {
                 take: 1200
             });
 
+            // Situação de transporte por NF (CT-e em trânsito coberto) — uma query batch.
+            const emMovimentoPorChave = await this.fetchEmMovimentoPorNfe(
+                allLocal.map((l) => l.chave_nfe),
+            );
+
             return await Promise.all(allLocal.map(async (local) => {
                 const normalizedXml = await this.normalizeBlobXml(local.xml_completo);
                 const xmlResolved = normalizedXml || local.xml_completo;
@@ -276,13 +281,46 @@ export class IcmsService {
                     TIPO_OPERACAO_DESC: local.tipo_operacao_desc,
                     XML_COMPLETO: local.xml_completo,
                     XML_TIPO: this.detectXmlType(xmlResolved),
-                    TIPO_IMPOSTO: local.tipo_imposto
+                    TIPO_IMPOSTO: local.tipo_imposto,
+                    // Situação de transporte: Entregue (lançada) > Em Trânsito (CT-e coberto em
+                    // movimento) > null. O badge ERP (PENDENTE/LANCADA) segue independente.
+                    RASTREIO_SITUACAO:
+                        local.status_erp === 'LANCADA'
+                            ? 'ENTREGUE'
+                            : emMovimentoPorChave.get(local.chave_nfe)
+                                ? 'EM_TRANSITO'
+                                : null,
                 };
             }));
         } catch (error) {
             this.logger.error('Error in syncInvoices', error, 'Sync');
             throw error;
         }
+    }
+
+    /**
+     * Para um lote de chaves de NF, devolve quais têm um CT-e em trânsito coberto pelo SSW
+     * (rastreio_cobertura='COBERTO' e rastreio_status não nulo). Uma única query.
+     */
+    private async fetchEmMovimentoPorNfe(chavesNfe: string[]): Promise<Map<string, boolean>> {
+        const result = new Map<string, boolean>();
+        const chaves = [...new Set((chavesNfe || []).map((c) => String(c || '').replace(/\D/g, '')).filter((c) => c.length === 44))];
+        if (!chaves.length) return result;
+        const inList = chaves.map((c) => `'${c}'`).join(',');
+        try {
+            const rows = await this.prisma.$queryRawUnsafe<Array<{ chave_nfe: string; em_movimento: boolean }>>(
+                `SELECT j.chave AS chave_nfe,
+                        bool_or(c.rastreio_cobertura = 'COBERTO' AND c.rastreio_status IS NOT NULL) AS em_movimento
+                 FROM com_cte_documento c,
+                      jsonb_array_elements_text(c.dados_json -> 'documentosNFe') AS j(chave)
+                 WHERE j.chave IN (${inList})
+                 GROUP BY j.chave`,
+            );
+            for (const r of rows) result.set(r.chave_nfe, !!r.em_movimento);
+        } catch (e) {
+            this.logger.error('Erro ao resolver situação de transporte das NFs', e instanceof Error ? e.stack : String(e), 'Rastreio');
+        }
+        return result;
     }
 
     private getDateRangeOrDefault(start?: string, end?: string) {
