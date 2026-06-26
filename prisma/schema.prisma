@@ -92,13 +92,62 @@ model CteDocumento {
   dados_json   Json? // CteData já parseado p/ a tela e o DACTE
   hash         String?
 
+  // ---- Rastreio SSW (movimentação física da carga) — ver cte-rastreio.* ----
+  // Movimentação derivada do SSW. NULL = ainda não consultado. EM_TRANSITO | ENTREGUE.
+  rastreio_status       String?
+  // Cobertura: COBERTO (transportadora responde no SSW) | SEM_RASTREIO (fora do SSW).
+  rastreio_cobertura    String?
+  rastreio_dominio      String? // domínio SSW que respondeu (ex.: GTR, DUM, OTC)
+  rastreio_previsao     DateTime? // previsão de entrega informada pelo SSW
+  rastreio_entregue_em  DateTime? // data/hora do evento de entrega
+  rastreio_recebedor    String? // quem recebeu (preenchido na entrega)
+  rastreio_ult_evento   String? // descrição da última ocorrência
+  rastreio_ult_consulta DateTime? // última vez que consultamos o SSW
+  rastreio_tentativas   Int       @default(0) // consultas sem documento localizado (p/ marcar SEM_RASTREIO)
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([data_emissao])
   @@index([status])
   @@index([numero])
+  @@index([rastreio_status])
   @@map("com_cte_documento")
+}
+
+// Eventos de movimentação (timeline) de um CT-e, captados do SSW (trackingdanfe).
+// Dedupe por (chave_acesso, data_hora, codigo_ssw) para não duplicar a cada polling.
+model CteRastreioEvento {
+  id             Int      @id @default(autoincrement())
+  chave_acesso   String // CT-e em com_cte_documento
+  data_hora      DateTime // data/hora da ocorrência (SSW)
+  codigo_ssw     String? // código numérico da ocorrência (ex.: 80, 1)
+  ocorrencia     String? // título da ocorrência
+  descricao      String?  @db.Text // detalhe livre da ocorrência
+  cidade         String? // "SAO PAULO / SP"
+  filial         String? // filial do SSW
+  tipo           String? // Informativo | ...
+  nome_recebedor String? // preenchido na entrega
+  dominio        String? // domínio SSW que respondeu
+  created_at     DateTime @default(now())
+
+  @@unique([chave_acesso, data_hora, codigo_ssw], name: "uq_cte_evento")
+  @@index([chave_acesso])
+  @@map("com_cte_rastreio_evento")
+}
+
+// Cobertura SSW por transportadora (CNPJ-raiz, 8 dígitos). Auto-aprendida pelo cron:
+// coberta=null (desconhecida) → true (respondeu no SSW) | false (fora do SSW).
+model CteTransportadoraCobertura {
+  cnpj_raiz              String    @id // 8 primeiros dígitos do CNPJ da transportadora
+  nome                   String?
+  coberta                Boolean? // null = desconhecida; true = SSW; false = fora do SSW
+  dominio                String? // último domínio SSW observado
+  tentativas_sem_sucesso Int       @default(0)
+  ultima_verificacao     DateTime?
+  atualizado_em          DateTime  @updatedAt
+
+  @@map("com_cte_transportadora_cobertura")
 }
 
 // Ponteiro de NSU da distribuição de NFS-e (ADN) por CNPJ consultado.

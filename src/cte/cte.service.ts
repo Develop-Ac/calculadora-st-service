@@ -149,6 +149,8 @@ export class CteService {
       tomadorCnpj: r.tomador_cnpj || '',
       modalidadePagador: r.modalidade_pagador || '',
       tomadorNos: !!r.tomador_nos,
+      rastreioStatus: (r.rastreio_status as 'EM_TRANSITO' | 'ENTREGUE' | null) || null,
+      rastreioCobertura: (r.rastreio_cobertura as 'COBERTO' | 'SEM_RASTREIO' | null) || null,
     }));
 
     return { items, total, page, pageSize };

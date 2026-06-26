@@ -2,11 +2,15 @@ import { Controller, Get, NotFoundException, Param, Post, Query, Res, Streamable
 import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { CteService } from './cte.service';
+import { CteRastreioService } from './cte-rastreio.service';
 
 @ApiTags('cte')
 @Controller('cte')
 export class CteController {
-  constructor(private readonly service: CteService) {}
+  constructor(
+    private readonly service: CteService,
+    private readonly rastreio: CteRastreioService,
+  ) {}
 
   /** Lista paginada (servida do Postgres) com filtros. */
   @Get('documentos')
@@ -37,6 +41,20 @@ export class CteController {
   @Post('sincronizar')
   async sincronizar() {
     return this.service.sincronizar();
+  }
+
+  /** Rastreio SSW (movimentação física) de um CT-e, para a tela de detalhe. */
+  @Get('rastreio/:chave')
+  async getRastreio(@Param('chave') chave: string) {
+    const data = await this.rastreio.getRastreio(chave);
+    if (!data) throw new NotFoundException(`CT-e não encontrado: ${chave}`);
+    return data;
+  }
+
+  /** Dispara o polling do rastreio no SSW manualmente (mesmo trabalho do cron). */
+  @Post('rastreio/sincronizar')
+  async sincronizarRastreio() {
+    return this.rastreio.sincronizar();
   }
 
   /** Carga inicial (job assíncrono com progresso). */

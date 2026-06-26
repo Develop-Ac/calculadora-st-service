@@ -148,4 +148,7 @@ export interface CteListItem {
   tomadorCnpj: string; // CNPJ/CPF da parte tomadora
   modalidadePagador: string; // papel: REMETENTE | DESTINATÁRIO | EXPEDIDOR | RECEBEDOR | OUTROS
   tomadorNos: boolean; // true quando a nossa empresa é o tomador (frete por nossa conta)
+  // Rastreio SSW (movimentação física) — usado para derivar a situação exibida.
+  rastreioStatus: 'EM_TRANSITO' | 'ENTREGUE' | null;
+  rastreioCobertura: 'COBERTO' | 'SEM_RASTREIO' | null;
 }

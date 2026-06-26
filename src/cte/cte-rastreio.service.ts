@@ -1,0 +1,393 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CteRastreioClient, SswTrackingEvento } from './cte-rastreio.client';
+
+/** Evento da timeline devolvido pela API (/cte/rastreio/:chave). */
+export interface RastreioEventoDto {
+  dataHora: string | null;
+  codigoSsw: string | null;
+  ocorrencia: string | null;
+  descricao: string | null;
+  cidade: string | null;
+  filial: string | null;
+  tipo: string | null;
+  nomeRecebedor: string | null;
+  entrega: boolean;
+}
+
+/** Resposta do rastreio de um CT-e (cabeçalho + timeline). */
+export interface RastreioDto {
+  chave: string;
+  statusFiscal: string | null; // PENDENTE | LANCADA (espelho do ERP)
+  status: string | null; // EM_TRANSITO | ENTREGUE | null (movimentação SSW)
+  cobertura: string | null; // COBERTO | SEM_RASTREIO | null
+  dominio: string | null;
+  previsao: string | null;
+  entregueEm: string | null;
+  recebedor: string | null;
+  ultimaConsulta: string | null;
+  eventos: RastreioEventoDto[];
+}
+
+// Janela de polling: só rastreamos CT-es emitidos nos últimos N dias.
+const JANELA_DIAS = Number(process.env.SSW_TRACKING_JANELA_DIAS) || 45;
+// Máximo de CT-es consultados por disparo do cron (politez com a API pública).
+const MAX_POR_RODADA = Number(process.env.SSW_TRACKING_MAX_POR_RODADA) || 150;
+// Concorrência de chamadas simultâneas ao SSW.
+const CONCORRENCIA = Number(process.env.SSW_TRACKING_CONCORRENCIA) || 5;
+// Após N consultas sem documento localizado, marca o CT-e como SEM_RASTREIO.
+const TENT_CTE_SEM_RASTREIO = Number(process.env.SSW_TRACKING_TENT_CTE) || 6;
+// Após N falhas acumuladas, marca a transportadora (CNPJ-raiz) como fora do SSW.
+const TENT_TRANSP_SEM_SSW = Number(process.env.SSW_TRACKING_TENT_TRANSP) || 8;
+
+@Injectable()
+export class CteRastreioService {
+  private readonly logger = new Logger(CteRastreioService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly client: CteRastreioClient,
+  ) {}
+
+  // =====================================================================
+  // LEITURA — timeline para a tela de detalhe
+  // =====================================================================
+
+  async getRastreio(chave: string): Promise<RastreioDto | null> {
+    const key = String(chave || '').trim();
+    if (!key) return null;
+
+    const cte = await this.prisma.cteDocumento.findUnique({
+      where: { chave_acesso: key },
+      select: {
+        chave_acesso: true,
+        status: true,
+        dados_json: true,
+        rastreio_status: true,
+        rastreio_cobertura: true,
+        rastreio_dominio: true,
+        rastreio_previsao: true,
+        rastreio_entregue_em: true,
+        rastreio_recebedor: true,
+        rastreio_ult_consulta: true,
+      },
+    });
+    if (!cte) return null;
+
+    const eventos = await this.prisma.cteRastreioEvento.findMany({
+      where: { chave_acesso: key },
+      orderBy: { data_hora: 'desc' },
+    });
+
+    // Previsão de entrega: prioriza o que o SSW gravou; senão, a estimativa do próprio CT-e.
+    const prevDoc = parseSswDate((cte.dados_json as any)?.prevEntrega);
+    const previsao = cte.rastreio_previsao || prevDoc;
+
+    return {
+      chave: key,
+      statusFiscal: cte.status,
+      status: cte.rastreio_status,
+      cobertura: cte.rastreio_cobertura,
+      dominio: cte.rastreio_dominio,
+      previsao: previsao ? previsao.toISOString() : null,
+      entregueEm: cte.rastreio_entregue_em ? cte.rastreio_entregue_em.toISOString() : null,
+      recebedor: cte.rastreio_recebedor,
+      ultimaConsulta: cte.rastreio_ult_consulta ? cte.rastreio_ult_consulta.toISOString() : null,
+      eventos: eventos.map((e) => ({
+        dataHora: e.data_hora ? e.data_hora.toISOString() : null,
+        codigoSsw: e.codigo_ssw,
+        ocorrencia: e.ocorrencia,
+        descricao: e.descricao,
+        cidade: e.cidade,
+        filial: e.filial,
+        tipo: e.tipo,
+        nomeRecebedor: e.nome_recebedor,
+        entrega: this.ehEntrega(e),
+      })),
+    };
+  }
+
+  // =====================================================================
+  // SINCRONIZAÇÃO — polling do SSW (cron e botão manual)
+  // =====================================================================
+
+  async sincronizar(): Promise<{
+    ok: true;
+    consultados: number;
+    emTransito: number;
+    entregues: number;
+    semRastreio: number;
+    erros: number;
+  }> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - JANELA_DIAS);
+
+    // Candidatos: PENDENTE (LANCADA já chegou → não gasta API), dentro da janela,
+    // ainda não entregue e ainda não marcado como sem rastreio. Os nunca-consultados
+    // (rastreio_ult_consulta = null) vêm primeiro.
+    const candidatos = await this.prisma.cteDocumento.findMany({
+      where: {
+        status: 'PENDENTE',
+        data_emissao: { gte: cutoff },
+        AND: [
+          { OR: [{ rastreio_status: null }, { rastreio_status: 'EM_TRANSITO' }] },
+          { OR: [{ rastreio_cobertura: null }, { rastreio_cobertura: 'COBERTO' }] },
+        ],
+      },
+      select: {
+        chave_acesso: true,
+        emitente_cnpj: true,
+        emitente_nome: true,
+        dados_json: true,
+        rastreio_tentativas: true,
+      },
+      orderBy: [{ rastreio_ult_consulta: { sort: 'asc', nulls: 'first' } }],
+      take: MAX_POR_RODADA,
+    });
+
+    if (!candidatos.length) {
+      return { ok: true, consultados: 0, emTransito: 0, entregues: 0, semRastreio: 0, erros: 0 };
+    }
+
+    // Cobertura conhecida por transportadora (CNPJ-raiz).
+    const coberturas = await this.prisma.cteTransportadoraCobertura.findMany();
+    const covMap = new Map(coberturas.map((c) => [c.cnpj_raiz, c]));
+
+    let emTransito = 0;
+    let entregues = 0;
+    let semRastreio = 0;
+    let erros = 0;
+    let consultados = 0;
+
+    for (const lote of chunk(candidatos, CONCORRENCIA)) {
+      await Promise.all(
+        lote.map(async (cte) => {
+          const raiz = raizCnpj(cte.emitente_cnpj);
+          const cov = raiz ? covMap.get(raiz) : undefined;
+
+          // Transportadora já sabidamente fora do SSW → marca e não chama a API.
+          if (cov && cov.coberta === false) {
+            await this.marcarSemRastreio(cte.chave_acesso);
+            semRastreio++;
+            return;
+          }
+
+          const chaveNfe = primeiraChaveNfe(cte.dados_json);
+          if (!chaveNfe) {
+            // Sem NF-e transportada não há como rastrear; apenas registra a tentativa.
+            await this.tocarConsulta(cte.chave_acesso);
+            return;
+          }
+
+          const resp = await this.client.rastrearPorChaveNfe(chaveNfe);
+          consultados++;
+
+          if (resp.success && resp.tracking.length) {
+            const r = await this.aplicarSucesso(cte.chave_acesso, resp.tracking);
+            if (r === 'ENTREGUE') entregues++;
+            else emTransito++;
+            const dominio = resp.tracking.find((t) => t.dominio)?.dominio || null;
+            await this.registrarCoberturaTransportadora(raiz, cte.emitente_nome, true, dominio, covMap);
+          } else if (resp.success) {
+            // Respondeu sem eventos — trata como em trânsito sem movimento ainda.
+            await this.tocarConsulta(cte.chave_acesso);
+          } else if (/localizado|inválida|nenhum/i.test(resp.message || '')) {
+            // Documento não encontrado no SSW: conta tentativa.
+            const novasTent = (cte.rastreio_tentativas || 0) + 1;
+            if (novasTent >= TENT_CTE_SEM_RASTREIO) {
+              await this.marcarSemRastreio(cte.chave_acesso);
+              semRastreio++;
+            } else {
+              await this.prisma.cteDocumento.update({
+                where: { chave_acesso: cte.chave_acesso },
+                data: { rastreio_tentativas: novasTent, rastreio_ult_consulta: new Date() },
+              });
+            }
+            await this.registrarCoberturaTransportadora(raiz, cte.emitente_nome, false, null, covMap);
+          } else {
+            // Erro de comunicação: não penaliza cobertura, só toca a consulta.
+            erros++;
+            await this.tocarConsulta(cte.chave_acesso);
+          }
+        }),
+      );
+    }
+
+    this.logger.log(
+      `Rastreio SSW: ${consultados} consultados, ${emTransito} em trânsito, ${entregues} entregues, ${semRastreio} sem rastreio, ${erros} erros.`,
+    );
+    return { ok: true, consultados, emTransito, entregues, semRastreio, erros };
+  }
+
+  // =====================================================================
+  // Persistência de eventos / status
+  // =====================================================================
+
+  /** Grava os eventos (dedupe) e atualiza o status do CT-e. Retorna o status final. */
+  private async aplicarSucesso(
+    chave: string,
+    tracking: SswTrackingEvento[],
+  ): Promise<'EM_TRANSITO' | 'ENTREGUE'> {
+    const eventos = tracking
+      .map((t) => ({ ...t, _dt: parseSswDate(t.data_hora || t.data_hora_efetiva) }))
+      .filter((t) => t._dt) as Array<SswTrackingEvento & { _dt: Date }>;
+
+    for (const ev of eventos) {
+      await this.prisma.cteRastreioEvento
+        .upsert({
+          where: {
+            uq_cte_evento: {
+              chave_acesso: chave,
+              data_hora: ev._dt,
+              codigo_ssw: ev.codigo_ssw || '',
+            },
+          },
+          create: {
+            chave_acesso: chave,
+            data_hora: ev._dt,
+            codigo_ssw: ev.codigo_ssw || '',
+            ocorrencia: ev.ocorrencia || null,
+            descricao: ev.descricao || null,
+            cidade: ev.cidade || null,
+            filial: ev.filial || null,
+            tipo: ev.tipo || null,
+            nome_recebedor: ev.nome_recebedor || null,
+            dominio: ev.dominio || null,
+          },
+          update: {
+            ocorrencia: ev.ocorrencia || null,
+            descricao: ev.descricao || null,
+            nome_recebedor: ev.nome_recebedor || null,
+          },
+        })
+        .catch(() => undefined);
+    }
+
+    const entrega = eventos.find((e) => this.ehEntrega(e));
+    const ultimo = eventos.slice().sort((a, b) => b._dt.getTime() - a._dt.getTime())[0];
+    const dominio = eventos.find((e) => e.dominio)?.dominio || null;
+
+    const status: 'EM_TRANSITO' | 'ENTREGUE' = entrega ? 'ENTREGUE' : 'EM_TRANSITO';
+
+    await this.prisma.cteDocumento.update({
+      where: { chave_acesso: chave },
+      data: {
+        rastreio_status: status,
+        rastreio_cobertura: 'COBERTO',
+        rastreio_dominio: dominio || undefined,
+        rastreio_ult_evento: ultimo?.ocorrencia || ultimo?.descricao || undefined,
+        rastreio_entregue_em: entrega ? entrega._dt : undefined,
+        rastreio_recebedor: entrega?.nome_recebedor || undefined,
+        rastreio_tentativas: 0,
+        rastreio_ult_consulta: new Date(),
+      },
+    });
+
+    return status;
+  }
+
+  private async marcarSemRastreio(chave: string) {
+    await this.prisma.cteDocumento
+      .update({
+        where: { chave_acesso: chave },
+        data: { rastreio_cobertura: 'SEM_RASTREIO', rastreio_ult_consulta: new Date() },
+      })
+      .catch(() => undefined);
+  }
+
+  private async tocarConsulta(chave: string) {
+    await this.prisma.cteDocumento
+      .update({ where: { chave_acesso: chave }, data: { rastreio_ult_consulta: new Date() } })
+      .catch(() => undefined);
+  }
+
+  /** Atualiza/insere a cobertura por transportadora (CNPJ-raiz) e o mapa em memória. */
+  private async registrarCoberturaTransportadora(
+    raiz: string | null,
+    nome: string | null | undefined,
+    sucesso: boolean,
+    dominio: string | null,
+    covMap: Map<string, any>,
+  ) {
+    if (!raiz) return;
+    const atual = covMap.get(raiz);
+
+    if (sucesso) {
+      const data = {
+        nome: nome || atual?.nome || null,
+        coberta: true,
+        dominio: dominio || atual?.dominio || null,
+        tentativas_sem_sucesso: 0,
+        ultima_verificacao: new Date(),
+      };
+      const novo = await this.prisma.cteTransportadoraCobertura
+        .upsert({ where: { cnpj_raiz: raiz }, create: { cnpj_raiz: raiz, ...data }, update: data })
+        .catch(() => null);
+      if (novo) covMap.set(raiz, novo);
+      return;
+    }
+
+    // Falha: acumula tentativas; só marca coberta=false quando ainda é desconhecida
+    // (nunca rebaixa uma transportadora já confirmada como SSW).
+    const novasTent = (atual?.tentativas_sem_sucesso || 0) + 1;
+    const cobertaNova = atual?.coberta === true ? true : novasTent >= TENT_TRANSP_SEM_SSW ? false : null;
+    const data = {
+      nome: nome || atual?.nome || null,
+      coberta: cobertaNova,
+      tentativas_sem_sucesso: novasTent,
+      ultima_verificacao: new Date(),
+    };
+    const novo = await this.prisma.cteTransportadoraCobertura
+      .upsert({ where: { cnpj_raiz: raiz }, create: { cnpj_raiz: raiz, ...data }, update: data })
+      .catch(() => null);
+    if (novo) covMap.set(raiz, novo);
+  }
+
+  /** Heurística de "entrega realizada" a partir de uma ocorrência do SSW. */
+  private ehEntrega(ev: {
+    codigo_ssw?: string | null;
+    ocorrencia?: string | null;
+    descricao?: string | null;
+    nome_recebedor?: string | null;
+  }): boolean {
+    const cod = String(ev.codigo_ssw || '').replace(/\D/g, '');
+    if (cod === '1') return true; // SSW: ocorrência 1 = mercadoria entregue
+    if (String(ev.nome_recebedor || '').trim()) return true;
+    const txt = `${ev.ocorrencia || ''} ${ev.descricao || ''}`.toUpperCase();
+    return /MERCADORIA ENTREGUE|ENTREGA REALIZADA|COMPROVANTE DE ENTREGA/.test(txt);
+  }
+}
+
+/** CNPJ-raiz (8 primeiros dígitos) ou null. */
+function raizCnpj(cnpj?: string | null): string | null {
+  const d = String(cnpj || '').replace(/\D/g, '');
+  return d.length >= 8 ? d.slice(0, 8) : null;
+}
+
+/** Primeira chave de NF-e transportada (dados_json.documentosNFe[0]). */
+function primeiraChaveNfe(dadosJson: any): string | null {
+  const docs = dadosJson && typeof dadosJson === 'object' ? (dadosJson as any).documentosNFe : null;
+  if (Array.isArray(docs)) {
+    for (const d of docs) {
+      const chave = String(d || '').replace(/\D/g, '');
+      if (chave.length === 44) return chave;
+    }
+  }
+  return null;
+}
+
+/** Converte a data do SSW ("2026-06-25T15:07:13" ou "2026-06-25 15:07:13") em Date. */
+function parseSswDate(value?: string | null): Date | null {
+  const s = String(value || '').trim();
+  if (!s) return null;
+  const iso = s.includes('T') ? s : s.replace(' ', 'T');
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Divide um array em lotes de tamanho `size`. */
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
