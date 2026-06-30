@@ -209,16 +209,52 @@ export class CteService {
   // SINCRONIZAÇÃO INCREMENTAL (botão "Atualizar")
   // =====================================================================
 
-  async sincronizar(): Promise<{ ok: true; pendentes: number; lancadas: number }> {
+  async sincronizar(): Promise<{ ok: true; pendentes: number; preenchidas: number; lancadas: number }> {
     // 1) Pendentes do ERP (CTE_DISTRIBUICAO, IMPORTADA='N') desde a data-base.
     const pendentes = await this.fetchCteDistribuicaoPendentes(INICIO_PADRAO);
+    const pendIndex = new Map<string, any>();
+    for (const p of pendentes) {
+      const c = String(p.CHAVE_CTE || '').trim();
+      if (c) pendIndex.set(c, p);
+    }
+    const chavesPendErp = Array.from(pendIndex.keys());
+
+    // Quais já estão completas (dados_json) ou já LANCADA no Postgres — não reprocessa
+    // (evita rebuscar XML à toa e não rebaixa LANCADA → PENDENTE).
+    const existentes = await this.prisma.cteDocumento.findMany({
+      where: { chave_acesso: { in: chavesPendErp } },
+      select: { chave_acesso: true, dados_json: true, status: true },
+    });
+    const jaResolvida = new Set(
+      existentes
+        .filter((e) => e.status === 'LANCADA' || (e.dados_json && typeof e.dados_json === 'object'))
+        .map((e) => e.chave_acesso),
+    );
+
+    // 2) Para as pendentes ainda SEM dados, busca o XML no CTE_ENTRADA_XML e preenche tudo.
+    //    Se o XML ainda não chegou, grava o básico (e tenta de novo no próximo sync).
     let pendCount = 0;
-    for (const lote of chunk(pendentes, 20)) {
-      await Promise.all(lote.map((row) => this.upsertPendenteBasico(row)));
-      pendCount += lote.length;
+    let preenchidas = 0;
+    for (const lote of chunk(chavesPendErp, 100)) {
+      const faltando = lote.filter((c) => !jaResolvida.has(c));
+      const xmlRows = faltando.length ? await this.fetchCteEntradaXmlByKeys(faltando) : [];
+      const xmlByChave = new Map<string, any>();
+      for (const r of xmlRows) xmlByChave.set(String(r.CHAVE_CTE || '').trim(), r.XML_COMPLETO);
+
+      for (const chave of lote) {
+        pendCount++;
+        if (jaResolvida.has(chave)) continue; // já completa/lançada
+        const xml = await this.normalizeBlobXml(xmlByChave.get(chave));
+        if (xml && xml.startsWith('<')) {
+          await this.upsertComXml(chave, xml, 'PENDENTE', null);
+          preenchidas++;
+        } else {
+          await this.upsertPendenteBasico(pendIndex.get(chave) || { CHAVE_CTE: chave });
+        }
+      }
     }
 
-    // 2) Reconciliação: docs locais PENDENTE que já estão na NF_ENTRADA viram LANCADA.
+    // 3) Reconciliação: docs locais PENDENTE que já estão na NF_ENTRADA viram LANCADA.
     const locaisPendentes = await this.prisma.cteDocumento.findMany({
       where: { status: 'PENDENTE' },
       select: { chave_acesso: true },
@@ -233,7 +269,7 @@ export class CteService {
       }
     }
 
-    return { ok: true, pendentes: pendCount, lancadas: lancadasCount };
+    return { ok: true, pendentes: pendCount, preenchidas, lancadas: lancadasCount };
   }
 
   // =====================================================================

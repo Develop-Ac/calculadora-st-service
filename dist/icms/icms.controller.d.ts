@@ -18,6 +18,7 @@ export declare class IcmsController {
         XML_COMPLETO: string;
         XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
         TIPO_IMPOSTO: string;
+        RASTREIO_SITUACAO: string;
     }[]>;
     getInvoiceByKey(chaveNfe: string): Promise<{
         EMPRESA: number;

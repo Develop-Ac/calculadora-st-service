@@ -27,7 +27,9 @@ export declare class IcmsService {
         XML_COMPLETO: string;
         XML_TIPO: "COMPLETO" | "RESUMO" | "SEM_XML";
         TIPO_IMPOSTO: string;
+        RASTREIO_SITUACAO: string;
     }[]>;
+    private fetchEmMovimentoPorNfe;
     private getDateRangeOrDefault;
     syncLaunchedInvoicesFromEntradaXml(): Promise<{
         totalEncontradas: number;
@@ -205,6 +207,9 @@ export declare class IcmsService {
         total: number;
         ok: number;
         divergente: number;
+    }>;
+    reauditarPendentesAlerta(diasJanela?: number, limite?: number): Promise<{
+        avaliadas: number;
     }>;
     listAuditorias(f: {
         q?: string;
