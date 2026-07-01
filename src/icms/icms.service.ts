@@ -1516,7 +1516,10 @@ export class IcmsService {
         item: FiscalConferenceItemDto;
     }) {
         const { emitenteCnpj, isCompraDentroEstado, item } = input;
-        const destinacaoMercadoria = item.destinacaoMercadoria;
+        // Valor marcado na tela de cálculo. NÃO decide mais revenda x uso/consumo
+        // (isso passou a ser pelo SUBTIPO do cadastro, ver abaixo); fica só como
+        // fallback de persistência, pois a coluna destinacao_mercadoria é NOT NULL.
+        const destinacaoTela = item.destinacaoMercadoria;
         const codProdFornecedorRaw = String(item.codProdFornecedor || '').trim();
         const codProdFornecedor = codProdFornecedorRaw || String(item.item || '');
         const normalizedNcm = this.cleanDigits(item.ncmNota || '');
@@ -1586,6 +1589,21 @@ export class IcmsService {
             }
         }
 
+        // Destinação (revenda x uso/consumo) definida pelo SUBTIPO do cadastro,
+        // e não pelo que foi marcado na tela de cálculo. A tela continua mandando
+        // apenas no imposto (ST x tributada), via item.impostoEscolhido.
+        //   SUBTIPO 00 -> comercialização   |   SUBTIPO 07 -> uso e consumo
+        const subtipoCadastro = this.digitsOnly(produtoInterno?.SUBTIPO);
+        const destinacaoMercadoria: 'COMERCIALIZACAO' | 'USO_CONSUMO' | null =
+            subtipoCadastro === '00' ? 'COMERCIALIZACAO' : subtipoCadastro === '07' ? 'USO_CONSUMO' : null;
+        if (!destinacaoMercadoria) {
+            divergencias.push(
+                produtoInterno
+                    ? `Não foi possível definir a destinação pelo SUBTIPO do cadastro (esperado 00=comercialização ou 07=uso e consumo, encontrado ${String(produtoInterno.SUBTIPO || '').trim() || 'vazio'}). Corrija o cadastro do produto.`
+                    : 'Não foi possível definir a destinação pelo SUBTIPO: produto interno não localizado no cadastro.',
+            );
+        }
+
         const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
         const pisEsperado = isMonofasico ? '04' : 'P01';
         const cofinsEsperado = isMonofasico ? '04' : 'C01';
@@ -1599,11 +1617,7 @@ export class IcmsService {
             }
 
             if (produtoInterno) {
-                const subtipo = String(produtoInterno.SUBTIPO || '').trim();
-                if (subtipo !== '00') {
-                    divergencias.push(`SUBTIPO inválido para comercialização: esperado 00 e encontrado ${subtipo || 'vazio'}.`);
-                }
-
+                // SUBTIPO já garante COMERCIALIZACAO aqui (destinação derivada dele).
                 const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
                 const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
 
@@ -1624,7 +1638,6 @@ export class IcmsService {
             const comercializavel = String(produtoInterno.COMERCIALIZAVEL || '').trim().toUpperCase();
             const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
             const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
-            const subtipo = String(produtoInterno.SUBTIPO || '').trim();
             const subgrp = String(produtoInterno.SUBGRP_CODIGO || '').trim();
 
             if (comercializavel !== 'N') {
@@ -1643,9 +1656,7 @@ export class IcmsService {
             if (subgrp !== '274') {
                 divergencias.push(`SUBGRP_CODIGO inválido para uso e consumo: esperado 274 e encontrado ${subgrp || 'vazio'}.`);
             }
-            if (subtipo !== '07') {
-                divergencias.push(`SUBTIPO inválido para uso e consumo: esperado 07 e encontrado ${subtipo || 'vazio'}.`);
-            }
+            // SUBTIPO já garante USO_CONSUMO aqui (destinação derivada dele).
         }
 
         return {
@@ -1654,7 +1665,7 @@ export class IcmsService {
             codigoProduto: String(produtoInterno?.PRO_CODIGO || vinculo?.PRO_CODIGO || codigoInternoManual || ''),
             codigoInternoManual: codigoInternoManual || null,
             impostoEscolhido: item.impostoEscolhido,
-            destinacaoMercadoria,
+            destinacaoMercadoria: destinacaoMercadoria ?? destinacaoTela,
             possuiIcmsSt,
             possuiDifal,
             semTributacao,
