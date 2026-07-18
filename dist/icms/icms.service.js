@@ -1253,7 +1253,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
     async analyzeFiscalItem(input) {
         var _a;
         const { emitenteCnpj, isCompraDentroEstado, item } = input;
-        const destinacaoMercadoria = item.destinacaoMercadoria;
+        const destinacaoTela = item.destinacaoMercadoria;
         const codProdFornecedorRaw = String(item.codProdFornecedor || '').trim();
         const codProdFornecedor = codProdFornecedorRaw || String(item.item || '');
         const normalizedNcm = this.cleanDigits(item.ncmNota || '');
@@ -1309,6 +1309,13 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 conformidades.push('Situação Tributária correta: ST0-X (com CEST).');
             }
         }
+        const subtipoCadastro = this.digitsOnly(produtoInterno === null || produtoInterno === void 0 ? void 0 : produtoInterno.SUBTIPO);
+        const destinacaoMercadoria = subtipoCadastro === '00' ? 'COMERCIALIZACAO' : subtipoCadastro === '07' ? 'USO_CONSUMO' : null;
+        if (!destinacaoMercadoria) {
+            divergencias.push(produtoInterno
+                ? `Não foi possível definir a destinação pelo SUBTIPO do cadastro (esperado 00=comercialização ou 07=uso e consumo, encontrado ${String(produtoInterno.SUBTIPO || '').trim() || 'vazio'}). Corrija o cadastro do produto.`
+                : 'Não foi possível definir a destinação pelo SUBTIPO: produto interno não localizado no cadastro.');
+        }
         const isMonofasico = this.isMonofasicoNcm(normalizedNcm);
         const pisEsperado = isMonofasico ? '04' : 'P01';
         const cofinsEsperado = isMonofasico ? '04' : 'C01';
@@ -1320,10 +1327,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 }
             }
             if (produtoInterno) {
-                const subtipo = String(produtoInterno.SUBTIPO || '').trim();
-                if (subtipo !== '00') {
-                    divergencias.push(`SUBTIPO inválido para comercialização: esperado 00 e encontrado ${subtipo || 'vazio'}.`);
-                }
                 const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
                 const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
                 if (pis !== pisEsperado.toUpperCase()) {
@@ -1344,7 +1347,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
             const comercializavel = String(produtoInterno.COMERCIALIZAVEL || '').trim().toUpperCase();
             const pis = String(produtoInterno.PIS_CODIGO || '').trim().toUpperCase();
             const cofins = String(produtoInterno.COFINS_CODIGO || '').trim().toUpperCase();
-            const subtipo = String(produtoInterno.SUBTIPO || '').trim();
             const subgrp = String(produtoInterno.SUBGRP_CODIGO || '').trim();
             if (comercializavel !== 'N') {
                 divergencias.push(`COMERCIALIZAVEL inválido para uso e consumo: esperado N e encontrado ${comercializavel || 'vazio'}.`);
@@ -1364,9 +1366,6 @@ let IcmsService = IcmsService_1 = class IcmsService {
             if (subgrp !== '274') {
                 divergencias.push(`SUBGRP_CODIGO inválido para uso e consumo: esperado 274 e encontrado ${subgrp || 'vazio'}.`);
             }
-            if (subtipo !== '07') {
-                divergencias.push(`SUBTIPO inválido para uso e consumo: esperado 07 e encontrado ${subtipo || 'vazio'}.`);
-            }
         }
         return {
             item: item.item,
@@ -1374,7 +1373,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             codigoProduto: String((produtoInterno === null || produtoInterno === void 0 ? void 0 : produtoInterno.PRO_CODIGO) || (vinculo === null || vinculo === void 0 ? void 0 : vinculo.PRO_CODIGO) || codigoInternoManual || ''),
             codigoInternoManual: codigoInternoManual || null,
             impostoEscolhido: item.impostoEscolhido,
-            destinacaoMercadoria,
+            destinacaoMercadoria: destinacaoMercadoria !== null && destinacaoMercadoria !== void 0 ? destinacaoMercadoria : destinacaoTela,
             possuiIcmsSt,
             possuiDifal,
             semTributacao,

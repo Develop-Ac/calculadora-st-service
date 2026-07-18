@@ -5,6 +5,7 @@ import archiver from 'archiver';
 import { parseStringPromise } from 'xml2js';
 import { PrismaService } from '../prisma/prisma.service';
 import { NfseAdnClient, AdnDfeItem } from './nfse-adn.client';
+import { NfseCertService } from './nfse-cert.service';
 
 /**
  * Distribuição de NFS-e do Padrão Nacional via ADN.
@@ -24,9 +25,68 @@ export class NfseDistService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adn: NfseAdnClient,
+    private readonly cert: NfseCertService,
   ) {}
 
+  /**
+   * Capta NFS-e de TODAS as empresas (um CNPJ por certificado ativo vinculado).
+   * Cada empresa tem seu próprio ponteiro de NSU e seu certificado.
+   */
   async sincronizar(): Promise<{
+    empresas: number;
+    novos: number;
+    atualizados: number;
+    eventos: number;
+    porEmpresa: Array<{
+      cnpj: string;
+      novos: number;
+      atualizados: number;
+      eventos: number;
+      ultimoNSU: number;
+      maxNSU: number;
+    }>;
+  }> {
+    const cnpjs = await this.cnpjsParaCaptar();
+    if (!cnpjs.length) {
+      throw new Error(
+        'Nenhuma empresa para captar: vincule um certificado ou configure NFSE_ADN_CNPJ.',
+      );
+    }
+
+    let novos = 0;
+    let atualizados = 0;
+    let eventos = 0;
+    const porEmpresa: Array<{
+      cnpj: string; novos: number; atualizados: number; eventos: number; ultimoNSU: number; maxNSU: number;
+    }> = [];
+
+    for (const cnpj of cnpjs) {
+      try {
+        const r = await this.sincronizarCnpj(cnpj);
+        novos += r.novos;
+        atualizados += r.atualizados;
+        eventos += r.eventos;
+        porEmpresa.push({ cnpj, novos: r.novos, atualizados: r.atualizados, eventos: r.eventos, ultimoNSU: r.ultimoNSU, maxNSU: r.maxNSU });
+      } catch (e) {
+        this.logger.error(
+          `Falha ao captar NFS-e do CNPJ ${cnpj}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+
+    return { empresas: cnpjs.length, novos, atualizados, eventos, porEmpresa };
+  }
+
+  /** CNPJs a captar = certificados ativos vinculados; fallback: NFSE_ADN_CNPJ. */
+  private async cnpjsParaCaptar(): Promise<string[]> {
+    const doBanco = await this.cert.listarCnpjsAtivos();
+    if (doBanco.length) return Array.from(new Set(doBanco));
+    const env = (process.env.NFSE_ADN_CNPJ || '').replace(/\D/g, '');
+    return env ? [env] : [];
+  }
+
+  /** Capta a distribuição de NFS-e de UM CNPJ (loop de NSU). */
+  private async sincronizarCnpj(cnpj: string): Promise<{
     novos: number;
     atualizados: number;
     eventos: number;
@@ -34,9 +94,6 @@ export class NfseDistService {
     maxNSU: number;
     iteracoes: number;
   }> {
-    const cnpj = (process.env.NFSE_ADN_CNPJ || '').replace(/\D/g, '');
-    if (!cnpj) throw new Error('NFSE_ADN_CNPJ não configurado (CNPJ a consultar na ADN).');
-
     const controle = await this.prisma.nfseDistControle.upsert({
       where: { cnpj },
       create: { cnpj },
@@ -84,7 +141,7 @@ export class NfseDistService {
     }
 
     this.logger.log(
-      `Distribuição NFS-e: ${novos} nova(s), ${atualizados} atualizada(s), ${eventos} evento(s); ` +
+      `Distribuição NFS-e [${cnpj}]: ${novos} nova(s), ${atualizados} atualizada(s), ${eventos} evento(s); ` +
         `NSU ${ultimoNSU}/${maxNSU} em ${iteracoes} iteração(ões).`,
     );
     return { novos, atualizados, eventos, ultimoNSU, maxNSU, iteracoes };
@@ -301,6 +358,7 @@ export class NfseDistService {
   async listar(filtros: {
     numero?: string;
     cnpj?: string;
+    empresa?: string;
     dataInicio?: string;
     dataFim?: string;
     papel?: string;
@@ -330,6 +388,7 @@ export class NfseDistService {
   private montarWhere(filtros: {
     numero?: string;
     cnpj?: string;
+    empresa?: string;
     dataInicio?: string;
     dataFim?: string;
     papel?: string;
@@ -339,6 +398,9 @@ export class NfseDistService {
     if (filtros.comRetFederal === '1' || filtros.comRetFederal === 'true') {
       where.retencao_federal = { gt: 0 };
     }
+    // Empresa (multiempresa): filtra pelo CNPJ de destino (a empresa que captou).
+    const empresa = (filtros.empresa || '').replace(/\D/g, '');
+    if (empresa) where.cnpj_destinatario = empresa;
     const prestados = (filtros.papel || '').toUpperCase() === 'PRESTADOS';
     const c = (filtros.cnpj || '').replace(/\D/g, '');
 
@@ -365,6 +427,7 @@ export class NfseDistService {
   async exportarXml(filtros: {
     numero?: string;
     cnpj?: string;
+    empresa?: string;
     dataInicio?: string;
     dataFim?: string;
     papel?: string;

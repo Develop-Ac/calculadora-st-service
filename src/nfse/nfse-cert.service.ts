@@ -81,6 +81,16 @@ export class NfseCertService {
     return { cnpj: escolhido.cnpj, pfx: Buffer.from(escolhido.arquivo), passphrase: decifrar(escolhido.senha) };
   }
 
+  /** CNPJs (14 díg.) de todos os certificados ativos — empresas a captar. */
+  async listarCnpjsAtivos(): Promise<string[]> {
+    const certs = await this.prisma.nfseCertificado.findMany({
+      where: { ativo: true },
+      select: { cnpj: true },
+      orderBy: { atualizado_em: 'desc' },
+    });
+    return certs.map((c) => c.cnpj.replace(/\D/g, '')).filter((c) => c.length === 14);
+  }
+
   /** Metadados (sem expor o .pfx nem a senha) para a tela. */
   async status() {
     const certs = await this.prisma.nfseCertificado.findMany({

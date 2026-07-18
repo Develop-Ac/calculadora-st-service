@@ -39,6 +39,7 @@ export class NfseController {
   listar(
     @Query('numero') numero?: string,
     @Query('cnpj') cnpj?: string,
+    @Query('empresa') empresa?: string,
     @Query('dataInicio') dataInicio?: string,
     @Query('dataFim') dataFim?: string,
     @Query('papel') papel?: string,
@@ -46,7 +47,7 @@ export class NfseController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.service.listar({ numero, cnpj, dataInicio, dataFim, papel, comRetFederal, page, pageSize });
+    return this.service.listar({ numero, cnpj, empresa, dataInicio, dataFim, papel, comRetFederal, page, pageSize });
   }
 
   /** Backfill: recalcula campos derivados (ex.: retenção federal) do histórico. */
@@ -60,6 +61,7 @@ export class NfseController {
   async exportarXml(
     @Query('numero') numero: string | undefined,
     @Query('cnpj') cnpj: string | undefined,
+    @Query('empresa') empresa: string | undefined,
     @Query('dataInicio') dataInicio: string | undefined,
     @Query('dataFim') dataFim: string | undefined,
     @Query('papel') papel: string | undefined,
@@ -69,6 +71,7 @@ export class NfseController {
     const { buffer, count } = await this.service.exportarXml({
       numero,
       cnpj,
+      empresa,
       dataInicio,
       dataFim,
       papel,
