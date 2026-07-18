@@ -115,6 +115,12 @@ export class NfseController {
     return this.cert.status();
   }
 
+  /** Backfill: re-extrai a Razão Social dos certificados já vinculados. */
+  @Post('certificado/reextrair')
+  reextrairNomesCertificado() {
+    return this.cert.reextrairNomes();
+  }
+
   @Post('certificado')
   @UseInterceptors(FileInterceptor('file'))
   async vincularCertificado(

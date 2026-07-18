@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { createSecureContext } from 'tls';
+import * as forge from 'node-forge';
 import { PrismaService } from '../prisma/prisma.service';
 import { cifrar, decifrar, temSegredo } from './nfse-crypto.util';
 
@@ -39,6 +40,11 @@ export class NfseCertService {
       throw new BadRequestException('Certificado ou senha inválidos (não foi possível abrir o .pfx).');
     }
 
+    // Extrai Razão Social + validade do certificado (best-effort, não lança).
+    const dados = this.extrairDados(params.pfx, params.senha, cnpj);
+    const nome = dados.razaoSocial || params.nome || null;
+    const validadeAte = params.validadeAte || dados.validadeAte || null;
+
     if (!temSegredo()) {
       this.logger.warn('NFSE_CERT_SECRET ausente: a senha do certificado será guardada em TEXTO PURO.');
     }
@@ -47,22 +53,72 @@ export class NfseCertService {
       where: { cnpj },
       create: {
         cnpj,
-        nome: params.nome || null,
+        nome,
         arquivo: params.pfx,
         senha: cifrar(params.senha),
-        validade_ate: params.validadeAte || null,
+        validade_ate: validadeAte,
         ativo: true,
       },
       update: {
-        nome: params.nome || null,
+        nome,
         arquivo: params.pfx,
         senha: cifrar(params.senha),
-        validade_ate: params.validadeAte || null,
+        validade_ate: validadeAte,
         ativo: true,
       },
     });
-    this.logger.log(`Certificado vinculado para o CNPJ ${cnpj}.`);
+    this.logger.log(`Certificado vinculado: ${cnpj}${nome ? ` (${nome})` : ''}.`);
     return { cnpj: saved.cnpj, nome: saved.nome || undefined, validade_ate: saved.validade_ate };
+  }
+
+  /**
+   * Lê o .pfx (PKCS#12) e extrai a Razão Social e a validade do certificado do
+   * titular. No e-CNPJ ICP-Brasil o Subject CN é "RAZÃO SOCIAL:CNPJ".
+   * Best-effort: nunca lança (retorna {} em caso de falha).
+   */
+  private extrairDados(
+    pfx: Buffer,
+    senha: string,
+    cnpjEsperado?: string,
+  ): { razaoSocial?: string; cnpj?: string; validadeAte?: Date } {
+    try {
+      const asn1 = forge.asn1.fromDer(forge.util.createBuffer(pfx.toString('binary')));
+      const p12 = forge.pkcs12.pkcs12FromAsn1(asn1, false, senha);
+      const bags = p12.getBags({ bagType: forge.pki.oids.certBag });
+      const certBags: any[] = (bags[forge.pki.oids.certBag] as any) || [];
+      const esperado = (cnpjEsperado || '').replace(/\D/g, '');
+
+      // Escolhe o certificado do TITULAR (CN "RAZÃO:CNPJ"), não o da AC.
+      let titular: any;
+      let candidato: any;
+      for (const b of certBags) {
+        const cert = b?.cert;
+        if (!cert) continue;
+        const cn = String(cert.subject.getField('CN')?.value || '');
+        const digitos = cn.replace(/\D/g, '');
+        if (esperado && digitos.includes(esperado)) {
+          titular = cert;
+          break;
+        }
+        if (!candidato && cn.includes(':')) candidato = cert;
+      }
+      const cert = titular || candidato || certBags[0]?.cert;
+      if (!cert) return {};
+
+      const cn = String(cert.subject.getField('CN')?.value || '');
+      const [razao, cnpjRaw] = cn.split(':');
+      const cnpj = (cnpjRaw || '').replace(/\D/g, '');
+      return {
+        razaoSocial: (razao || cn).trim() || undefined,
+        cnpj: cnpj.length === 14 ? cnpj : undefined,
+        validadeAte: cert.validity?.notAfter,
+      };
+    } catch (e) {
+      this.logger.warn(
+        `Não foi possível extrair dados do certificado: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return {};
+    }
   }
 
   /** Retorna o certificado ativo (preferindo o do CNPJ, senão o mais recente). */
@@ -79,6 +135,30 @@ export class NfseCertService {
       }));
     if (!escolhido) return null;
     return { cnpj: escolhido.cnpj, pfx: Buffer.from(escolhido.arquivo), passphrase: decifrar(escolhido.senha) };
+  }
+
+  /** Backfill: re-extrai a Razão Social/validade dos certificados já vinculados
+   *  (usa o .pfx guardado + senha decifrada). Corrige nomes gravados como arquivo. */
+  async reextrairNomes(): Promise<{ total: number; atualizados: number }> {
+    const certs = await this.prisma.nfseCertificado.findMany();
+    let atualizados = 0;
+    for (const c of certs) {
+      try {
+        const senha = decifrar(c.senha);
+        const dados = this.extrairDados(Buffer.from(c.arquivo), senha, c.cnpj);
+        if (dados.razaoSocial && dados.razaoSocial !== c.nome) {
+          await this.prisma.nfseCertificado.update({
+            where: { cnpj: c.cnpj },
+            data: { nome: dados.razaoSocial, validade_ate: c.validade_ate || dados.validadeAte || null },
+          });
+          atualizados++;
+        }
+      } catch {
+        /* pula este cert */
+      }
+    }
+    this.logger.log(`Re-extração de nomes de certificado: ${atualizados}/${certs.length} atualizado(s).`);
+    return { total: certs.length, atualizados };
   }
 
   /** CNPJs (14 díg.) de todos os certificados ativos — empresas a captar. */
