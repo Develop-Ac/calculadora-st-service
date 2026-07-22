@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { OpenQueryService } from '../shared/database/openquery/openquery.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SimplesNacionalService } from './simples-nacional.service';
 import * as xml2js from 'xml2js';
 import * as zlib from 'zlib'; // for gzip
 import { randomUUID } from 'crypto';
@@ -64,6 +65,7 @@ export class IcmsService {
     constructor(
         private readonly openQuery: OpenQueryService,
         private readonly prisma: PrismaService,
+        private readonly simplesNacional: SimplesNacionalService,
     ) {
         this.parseReferenceData();
     }
@@ -1233,6 +1235,18 @@ export class IcmsService {
         return { mva: null, item: null, matchType: 'Não Encontrado' };
     }
 
+    /**
+     * Alíquota interestadual com MT como destino (Res. Senado 22/89 e 13/2012):
+     * 4% p/ mercadoria importada (orig 1, 2, 3 ou 8); 7% quando a origem é
+     * Sul/Sudeste exceto ES; 12% nas demais. Usada quando a NF não destaca
+     * pICMS (fornecedor do Simples Nacional).
+     */
+    private aliquotaInterestadualPorUf(ufOrigem: string, origProduto: string): number {
+        if (['1', '2', '3', '8'].includes(origProduto)) return 0.04;
+        const sulSudesteExcetoEs = new Set(['SP', 'RJ', 'MG', 'PR', 'SC', 'RS']);
+        return sulSudesteExcetoEs.has(ufOrigem) ? 0.07 : 0.12;
+    }
+
     // Extracts items from XML and calculates ST for each
     async calculateStForInvoice(xmlContent: string, icmsInternoRate = 17.0) {
         const xmlStr = await this.decodeXml(xmlContent);
@@ -1284,6 +1298,20 @@ export class IcmsService {
         // de ±tolerância são tratadas como OK (sem guia). Default R$ 10,00.
         const tolGuia = Number(process.env.GUIA_TOLERANCIA_BRL) > 0 ? Number(process.env.GUIA_TOLERANCIA_BRL) : 10;
 
+        // --- Regime tributário do fornecedor (decide a fórmula do DIFAL) ---
+        // 1º: ReceitaWS (consulta online, sem persistência); 2º: CRT do próprio XML.
+        // CRT 1 (Simples) e 4 (MEI) = optante; CRT 2 (Simples acima do sublimite,
+        // destaca ICMS) e 3 (regime normal) = não optante p/ efeito de DIFAL.
+        const emitUf = String(emit?.enderEmit?.UF || '').toUpperCase();
+        const crtEmit = String(emit?.CRT || '').trim();
+        const regime = await this.simplesNacional.consultarOptante(emit.CNPJ || '');
+        let optanteSimples: boolean | null = regime.optanteSimples;
+        let regimeFonte: string = regime.fonte;
+        if (optanteSimples === null && crtEmit) {
+            optanteSimples = crtEmit === '1' || crtEmit === '4';
+            regimeFonte = 'crt';
+        }
+
         for (const item of det) {
             const prod = item.prod;
             const imposto = item.imposto;
@@ -1311,6 +1339,7 @@ export class IcmsService {
             let pIcmsOrigem = 0;
             let cstNota = '';
             let icmsTag = '';
+            let origProduto = '';
 
             const icmsKeys = Object.keys(imposto.ICMS || {});
             for (const key of icmsKeys) {
@@ -1321,6 +1350,7 @@ export class IcmsService {
                 pMvaNota = parseFloat(vals.pMVAST || 0);
                 if (vals.pICMS) pIcmsOrigem = parseFloat(vals.pICMS);
                 cstNota = String(vals.CST || vals.CSOSN || '');
+                if (vals.orig !== undefined) origProduto = String(vals.orig);
             }
 
             // Logic for Credit Origin
@@ -1383,21 +1413,36 @@ export class IcmsService {
             // ============================================
             // CALCULO DO DIFAL
             // ============================================
-            // Regra independente do MVA: Calcula o DIFAL sempre baseando-se apenas na Base de Cálculo da Operação
+            // Regra independente do MVA. A fórmula depende do regime do fornecedor:
+            //
+            //  Não optante do Simples (NF com ICMS destacado):
+            //    DIFAL = [(V oper − ICMS origem) / (1 − alíq. interna)] × alíq. interna − (V oper × alíq. interestadual)
+            //
+            //  Optante do Simples — ou qualquer operação sem destaque/crédito de ICMS:
+            //    Crédito = (V oper / (1 − alíq. interestadual)) × alíq. interestadual
+            //    DIFAL   = (V oper / (1 − alíq. interna)) × alíq. interna − Crédito
             const aliquotaInternaDecimal = icmsInternoRate / 100.0;
-            const aliquotaInterestadualDIFAL = pIcmsOrigem > 0 ? pIcmsOrigem / 100.0 : 0.07; // Usa a taxa de origem real para DIFAL ou 7% padrão
+            // NF sem pICMS (Simples não destaca): deriva a interestadual da UF de origem + origem da mercadoria
+            const aliquotaInterestadualDIFAL = pIcmsOrigem > 0
+                ? pIcmsOrigem / 100.0
+                : this.aliquotaInterestadualPorUf(emitUf, origProduto);
             let vlDifalCalculado = 0;
+            let vlCreditoDifal = 0;
+            let formulaDifal: 'COM_DESTAQUE' | 'SEM_DESTAQUE_SIMPLES';
 
-            if (vIcmsProprio > 0) {
-                // Quando há destaque de ICMS na origem
-                // ICMS DIFAL = [(V oper − ICMS origem) / (1 − alíquota interna)] × alíquota interna − (V oper × alíquota interestadual)
+            if (optanteSimples !== true && vIcmsProprio > 0) {
+                // Fornecedor do regime normal, com destaque de ICMS na origem
+                formulaDifal = 'COM_DESTAQUE';
                 const baseDifal = (baseSoma - vIcmsProprio) / (1 - aliquotaInternaDecimal);
-                const difalRaw = (baseDifal * aliquotaInternaDecimal) - (baseSoma * aliquotaInterestadualDIFAL);
-                vlDifalCalculado = Math.max(0, difalRaw);
+                vlCreditoDifal = baseSoma * aliquotaInterestadualDIFAL;
+                vlDifalCalculado = Math.max(0, (baseDifal * aliquotaInternaDecimal) - vlCreditoDifal);
             } else {
-                // DIFAL = Base × (Alíquota interna MT − Alíquota interestadual)
-                const difalRaw = baseSoma * (aliquotaInternaDecimal - aliquotaInterestadualDIFAL);
-                vlDifalCalculado = Math.max(0, difalRaw);
+                // Optante do Simples Nacional (ou NF sem crédito de ICMS destacado):
+                // crédito presumido "por dentro" pela alíquota interestadual
+                formulaDifal = 'SEM_DESTAQUE_SIMPLES';
+                vlCreditoDifal = (baseSoma / (1 - aliquotaInterestadualDIFAL)) * aliquotaInterestadualDIFAL;
+                const debitoInterno = (baseSoma / (1 - aliquotaInternaDecimal)) * aliquotaInternaDecimal;
+                vlDifalCalculado = Math.max(0, debitoInterno - vlCreditoDifal);
             }
 
             vlDifalCalculado = parseFloat(vlDifalCalculado.toFixed(2));
@@ -1425,6 +1470,12 @@ export class IcmsService {
                 stDestacado: vStDestacado,
                 stCalculado: vStCalculado,
                 vlDifal: vlDifalCalculado, // NOVO CAMPO
+                // Transparência do DIFAL por regime do fornecedor
+                optanteSimples,
+                regimeFonte, // receitaws | crt | indefinido
+                formulaDifal, // COM_DESTAQUE | SEM_DESTAQUE_SIMPLES
+                vlCreditoDifal: parseFloat(vlCreditoDifal.toFixed(2)),
+                aliqInterestadualDifal: aliquotaInterestadualDIFAL * 100,
                 diferenca: diffSt,
                 status: status
             });

@@ -50,6 +50,7 @@ exports.IcmsService = void 0;
 const common_1 = require("@nestjs/common");
 const openquery_service_1 = require("../shared/database/openquery/openquery.service");
 const prisma_service_1 = require("../prisma/prisma.service");
+const simples_nacional_service_1 = require("./simples-nacional.service");
 const xml2js = __importStar(require("xml2js"));
 const zlib = __importStar(require("zlib"));
 const crypto_1 = require("crypto");
@@ -61,9 +62,10 @@ const archiver_1 = __importDefault(require("archiver"));
 const stream_1 = require("stream");
 const Minio = __importStar(require("minio"));
 let IcmsService = IcmsService_1 = class IcmsService {
-    constructor(openQuery, prisma) {
+    constructor(openQuery, prisma, simplesNacional) {
         this.openQuery = openQuery;
         this.prisma = prisma;
+        this.simplesNacional = simplesNacional;
         this.logger = new common_1.Logger(IcmsService_1.name);
         this.minioBucket = process.env.MINIO_BUCKET || 'documentos';
         this.minioRegion = process.env.MINIO_REGION || 'us-east-1';
@@ -1026,7 +1028,14 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         return { mva: null, item: null, matchType: 'Não Encontrado' };
     }
+    aliquotaInterestadualPorUf(ufOrigem, origProduto) {
+        if (['1', '2', '3', '8'].includes(origProduto))
+            return 0.04;
+        const sulSudesteExcetoEs = new Set(['SP', 'RJ', 'MG', 'PR', 'SC', 'RS']);
+        return sulSudesteExcetoEs.has(ufOrigem) ? 0.07 : 0.12;
+    }
     async calculateStForInvoice(xmlContent, icmsInternoRate = 17.0) {
+        var _a;
         const xmlStr = await this.decodeXml(xmlContent);
         if (!xmlStr)
             return [];
@@ -1067,6 +1076,15 @@ let IcmsService = IcmsService_1 = class IcmsService {
         }
         const results = [];
         const tolGuia = Number(process.env.GUIA_TOLERANCIA_BRL) > 0 ? Number(process.env.GUIA_TOLERANCIA_BRL) : 10;
+        const emitUf = String(((_a = emit === null || emit === void 0 ? void 0 : emit.enderEmit) === null || _a === void 0 ? void 0 : _a.UF) || '').toUpperCase();
+        const crtEmit = String((emit === null || emit === void 0 ? void 0 : emit.CRT) || '').trim();
+        const regime = await this.simplesNacional.consultarOptante(emit.CNPJ || '');
+        let optanteSimples = regime.optanteSimples;
+        let regimeFonte = regime.fonte;
+        if (optanteSimples === null && crtEmit) {
+            optanteSimples = crtEmit === '1' || crtEmit === '4';
+            regimeFonte = 'crt';
+        }
         for (const item of det) {
             const prod = item.prod;
             const imposto = item.imposto;
@@ -1087,6 +1105,7 @@ let IcmsService = IcmsService_1 = class IcmsService {
             let pIcmsOrigem = 0;
             let cstNota = '';
             let icmsTag = '';
+            let origProduto = '';
             const icmsKeys = Object.keys(imposto.ICMS || {});
             for (const key of icmsKeys) {
                 const vals = imposto.ICMS[key];
@@ -1097,6 +1116,8 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 if (vals.pICMS)
                     pIcmsOrigem = parseFloat(vals.pICMS);
                 cstNota = String(vals.CST || vals.CSOSN || '');
+                if (vals.orig !== undefined)
+                    origProduto = String(vals.orig);
             }
             let taxaOrigem = 0.07;
             if (pIcmsOrigem > 0.00 && pIcmsOrigem <= 7.0) {
@@ -1144,16 +1165,23 @@ let IcmsService = IcmsService_1 = class IcmsService {
                     status = "OK (Padrão 50%)";
             }
             const aliquotaInternaDecimal = icmsInternoRate / 100.0;
-            const aliquotaInterestadualDIFAL = pIcmsOrigem > 0 ? pIcmsOrigem / 100.0 : 0.07;
+            const aliquotaInterestadualDIFAL = pIcmsOrigem > 0
+                ? pIcmsOrigem / 100.0
+                : this.aliquotaInterestadualPorUf(emitUf, origProduto);
             let vlDifalCalculado = 0;
-            if (vIcmsProprio > 0) {
+            let vlCreditoDifal = 0;
+            let formulaDifal;
+            if (optanteSimples !== true && vIcmsProprio > 0) {
+                formulaDifal = 'COM_DESTAQUE';
                 const baseDifal = (baseSoma - vIcmsProprio) / (1 - aliquotaInternaDecimal);
-                const difalRaw = (baseDifal * aliquotaInternaDecimal) - (baseSoma * aliquotaInterestadualDIFAL);
-                vlDifalCalculado = Math.max(0, difalRaw);
+                vlCreditoDifal = baseSoma * aliquotaInterestadualDIFAL;
+                vlDifalCalculado = Math.max(0, (baseDifal * aliquotaInternaDecimal) - vlCreditoDifal);
             }
             else {
-                const difalRaw = baseSoma * (aliquotaInternaDecimal - aliquotaInterestadualDIFAL);
-                vlDifalCalculado = Math.max(0, difalRaw);
+                formulaDifal = 'SEM_DESTAQUE_SIMPLES';
+                vlCreditoDifal = (baseSoma / (1 - aliquotaInterestadualDIFAL)) * aliquotaInterestadualDIFAL;
+                const debitoInterno = (baseSoma / (1 - aliquotaInternaDecimal)) * aliquotaInternaDecimal;
+                vlDifalCalculado = Math.max(0, debitoInterno - vlCreditoDifal);
             }
             vlDifalCalculado = parseFloat(vlDifalCalculado.toFixed(2));
             results.push({
@@ -1179,6 +1207,11 @@ let IcmsService = IcmsService_1 = class IcmsService {
                 stDestacado: vStDestacado,
                 stCalculado: vStCalculado,
                 vlDifal: vlDifalCalculado,
+                optanteSimples,
+                regimeFonte,
+                formulaDifal,
+                vlCreditoDifal: parseFloat(vlCreditoDifal.toFixed(2)),
+                aliqInterestadualDifal: aliquotaInterestadualDIFAL * 100,
                 diferenca: diffSt,
                 status: status
             });
@@ -3196,6 +3229,7 @@ IcmsService.CUF_SIGLA = {
 exports.IcmsService = IcmsService = IcmsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [openquery_service_1.OpenQueryService,
-        prisma_service_1.PrismaService])
+        prisma_service_1.PrismaService,
+        simples_nacional_service_1.SimplesNacionalService])
 ], IcmsService);
 //# sourceMappingURL=icms.service.js.map

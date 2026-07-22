@@ -1,9 +1,11 @@
 import { OpenQueryService } from '../shared/database/openquery/openquery.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SimplesNacionalService } from './simples-nacional.service';
 import { FiscalConferenceRequestDto, FiscalConferenceItemDto } from './dto/fiscal-conference.dto';
 export declare class IcmsService {
     private readonly openQuery;
     private readonly prisma;
+    private readonly simplesNacional;
     private readonly logger;
     private readonly minioBucket;
     private readonly minioRegion;
@@ -12,7 +14,7 @@ export declare class IcmsService {
     private readonly monofasicoNcmSet;
     private readonly launchedSyncJobs;
     private readonly xmlNormalizationJobs;
-    constructor(openQuery: OpenQueryService, prisma: PrismaService);
+    constructor(openQuery: OpenQueryService, prisma: PrismaService, simplesNacional: SimplesNacionalService);
     private parseReferenceData;
     syncInvoices(start?: string, end?: string): Promise<{
         CHAVE_NFE: string;
@@ -114,6 +116,7 @@ export declare class IcmsService {
     private isInterstateInvoice;
     private cleanNcm;
     private findMvaInRef;
+    private aliquotaInterestadualPorUf;
     calculateStForInvoice(xmlContent: string, icmsInternoRate?: number): Promise<any[]>;
     previewFiscalConference(dto: FiscalConferenceRequestDto): Promise<{
         notas: any[];

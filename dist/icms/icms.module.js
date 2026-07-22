@@ -13,13 +13,14 @@ const icms_service_1 = require("./icms.service");
 const icms_sync_cron_1 = require("./icms-sync.cron");
 const auditoria_ajustado_cron_1 = require("./auditoria-ajustado.cron");
 const auditoria_reauditoria_cron_1 = require("./auditoria-reauditoria.cron");
+const simples_nacional_service_1 = require("./simples-nacional.service");
 let IcmsModule = class IcmsModule {
 };
 exports.IcmsModule = IcmsModule;
 exports.IcmsModule = IcmsModule = __decorate([
     (0, common_1.Module)({
         controllers: [icms_controller_1.IcmsController],
-        providers: [icms_service_1.IcmsService, icms_sync_cron_1.IcmsSyncCron, auditoria_ajustado_cron_1.AuditoriaAjustadoCron, auditoria_reauditoria_cron_1.AuditoriaReauditoriaCron],
+        providers: [icms_service_1.IcmsService, simples_nacional_service_1.SimplesNacionalService, icms_sync_cron_1.IcmsSyncCron, auditoria_ajustado_cron_1.AuditoriaAjustadoCron, auditoria_reauditoria_cron_1.AuditoriaReauditoriaCron],
     })
 ], IcmsModule);
 //# sourceMappingURL=icms.module.js.map
