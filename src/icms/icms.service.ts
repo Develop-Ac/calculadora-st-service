@@ -1410,6 +1410,14 @@ export class IcmsService {
                 else status = "OK (Padrão 50%)";
             }
 
+            // Desmembra a diferença em dois valores positivos e explícitos, para
+            // exibição tanto no cálculo quanto na listagem:
+            //  - valorGuiaComplementar: quanto ainda falta pagar (ST calculada > destacada)
+            //  - valorPagoAMais: quanto foi pago a mais (ST destacada > calculada)
+            // Usa o diffSt final (já zerado em "Sem Tributação"), então ambos ficam 0 nesse caso.
+            const valorGuiaComplementar = parseFloat(Math.max(0, diffSt).toFixed(2));
+            const valorPagoAMais = parseFloat(Math.max(0, -diffSt).toFixed(2));
+
             // ============================================
             // CALCULO DO DIFAL
             // ============================================
@@ -1477,6 +1485,8 @@ export class IcmsService {
                 vlCreditoDifal: parseFloat(vlCreditoDifal.toFixed(2)),
                 aliqInterestadualDifal: aliquotaInterestadualDIFAL * 100,
                 diferenca: diffSt,
+                valorGuiaComplementar, // > 0 quando ainda falta pagar ST
+                valorPagoAMais,        // > 0 quando a ST destacada na NF ficou acima da calculada
                 status: status
             });
         }
