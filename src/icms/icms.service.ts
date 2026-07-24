@@ -379,6 +379,88 @@ export class IcmsService {
         };
     }
 
+    /**
+     * Importa notas a partir de XMLs enviados pelo usuário (upload manual na tela).
+     * Persiste cada uma em NfeConciliacao com status_erp='UPLOAD' para que apareçam
+     * na listagem "Banco de Dados" e possam ser abertas/calculadas no detalhe.
+     *
+     * Idempotente: se a chave já existir, apenas atualiza o XML — NUNCA sobrescreve
+     * um status_erp real do ERP (PENDENTE/LANCADA/EXCLUIDA) com 'UPLOAD'.
+     * Retorna as notas no mesmo formato de getInvoiceByKey/syncInvoices.
+     */
+    async importXmlInvoices(xmls: string[]) {
+        const parser = new xml2js.Parser({ explicitArray: false });
+        const out: any[] = [];
+
+        for (const raw of Array.isArray(xmls) ? xmls : []) {
+            const xmlStr = await this.decodeXml(raw);
+            if (!xmlStr) continue;
+
+            let parsed: any;
+            try {
+                parsed = await parser.parseStringPromise(xmlStr);
+            } catch (e) {
+                this.logger.warn(`XML importado inválido, ignorado: ${e instanceof Error ? e.message : String(e)}`, 'Import');
+                continue;
+            }
+
+            const nfe = parsed.nfeProc ? parsed.nfeProc.NFe : parsed.NFe;
+            if (!nfe?.infNFe?.['$']?.Id) continue;
+
+            const infNfe = nfe.infNFe;
+            const chave = String(infNfe['$']['Id']).replace('NFe', '').replace(/\D/g, '');
+            if (chave.length !== 44) continue;
+
+            const emit = infNfe.emit || {};
+            const ide = infNfe.ide || {};
+            const valorTotal = this.extractValorTotalFromXml(xmlStr);
+            const compressedXml = this.encodeXml(xmlStr);
+            const tpNF = parseInt(ide.tpNF || 0);
+            const dataEmissao = new Date(ide.dhEmi || ide.dEmi || Date.now());
+
+            try {
+                const record = await this.prisma.nfeConciliacao.upsert({
+                    where: { chave_nfe: chave },
+                    create: {
+                        chave_nfe: chave,
+                        emitente: emit.xNome || 'Desconhecido',
+                        cnpj_emitente: emit.CNPJ || emit.CPF || '',
+                        data_emissao: dataEmissao,
+                        valor_total: valorTotal,
+                        xml_completo: compressedXml,
+                        status_erp: 'UPLOAD',
+                        tipo_operacao: tpNF,
+                        tipo_operacao_desc: tpNF === 0 ? 'ENTRADA' : 'SAÍDA',
+                    },
+                    // Não mexe em status_erp: preserva status real do ERP se a nota já existir.
+                    update: {
+                        xml_completo: compressedXml,
+                        updated_at: new Date(),
+                    },
+                });
+
+                out.push({
+                    CHAVE_NFE: record.chave_nfe,
+                    NOME_EMITENTE: record.emitente,
+                    CPF_CNPJ_EMITENTE: record.cnpj_emitente,
+                    DATA_EMISSAO: record.data_emissao,
+                    DT_ENTRADA: record.dt_entrada,
+                    VALOR_TOTAL: Number(record.valor_total || 0),
+                    STATUS_ERP: record.status_erp,
+                    TIPO_OPERACAO: record.tipo_operacao,
+                    TIPO_OPERACAO_DESC: record.tipo_operacao_desc,
+                    XML_COMPLETO: xmlStr,
+                    XML_TIPO: this.detectXmlType(xmlStr),
+                    TIPO_IMPOSTO: record.tipo_imposto,
+                });
+            } catch (e) {
+                this.logger.error(`Falha ao importar NF ${chave}`, e instanceof Error ? e.stack : String(e), 'Import');
+            }
+        }
+
+        return out;
+    }
+
     private detectXmlType(xml: string | null | undefined): 'COMPLETO' | 'RESUMO' | 'SEM_XML' {
         const raw = String(xml || '').trim();
         if (!raw) return 'SEM_XML';

@@ -13,6 +13,15 @@ export class IcmsController {
         return this.service.syncInvoices(start, end);
     }
 
+    @Post('nfe-distribuicao/import')
+    async importXmlInvoices(@Body() body: { xmls: string[] }) {
+        const xmls = Array.isArray(body?.xmls) ? body.xmls : [];
+        if (xmls.length === 0) {
+            throw new BadRequestException('Nenhum XML enviado para importação.');
+        }
+        return this.service.importXmlInvoices(xmls);
+    }
+
     @Get('nfe-distribuicao/:chaveNfe')
     async getInvoiceByKey(@Param('chaveNfe') chaveNfe: string) {
         const invoice = await this.service.getInvoiceByKey(chaveNfe);
